@@ -388,10 +388,12 @@ class OrchestratorTUI(App):
                     log.write(f"[dim yellow]↳ Output:[/dim yellow] {escape(out_str)}")
             elif act_type == "agent_message":
                 msg_content = str(activity.get("content", ""))
-                log.write(msg_content, markup=False)
+                log.write(Text(msg_content))
                 if event.role:
                     chat_log = self.query_one("#chat-log", RichLog)
-                    chat_log.write(f"[bold green]{escape(str(event.role))}:[/bold green] {escape(msg_content)}")
+                    prefix = Text.from_markup(f"[bold green]{escape(str(event.role))}:[/bold green] ")
+                    prefix.append(msg_content)
+                    chat_log.write(prefix)
                     chat_log.scroll_end(animate=False)
             elif act_type == "error":
                 log.write(f"[bold red]✗ Error:[/bold red] {escape(str(activity.get('error', '')))}")
@@ -409,7 +411,9 @@ class OrchestratorTUI(App):
             reason = event.payload.get("reason") or "Workflow paused by agent or operator"
             log.write(f"\n[bold yellow]⏸ Workflow Paused:[/bold yellow] {escape(reason)}")
             chat_log = self.query_one("#chat-log", RichLog)
-            chat_log.write(f"[bold yellow]⏸ {escape(str(event.role or 'Agent'))}:[/bold yellow] {escape(reason)}")
+            pause_prefix = Text.from_markup(f"[bold yellow]⏸ {escape(str(event.role or 'Agent'))}:[/bold yellow] ")
+            pause_prefix.append(reason)
+            chat_log.write(pause_prefix)
             chat_log.scroll_end(animate=False)
             refreshed = await self.db.get_workflow_run(self.workflow_run.run_id)
             if refreshed:
@@ -422,15 +426,19 @@ class OrchestratorTUI(App):
                 self.workflow_run = refreshed
             self._update_header()
         elif event.type in ["agent_message_sent", "message_sent"]:
-            payload = event.payload
+            payload = event.payload or {}
             sender = event.role or "Agent"
             recipient = payload.get("recipient") or payload.get("target") or "human"
             message_text = payload.get("message") or payload.get("content") or ""
             chat_log = self.query_one("#chat-log", RichLog)
             if str(recipient).lower() == "human":
-                chat_log.write(f"[bold green]{escape(str(sender))}:[/bold green] {escape(str(message_text))}")
+                prefix = Text.from_markup(f"[bold green]{escape(str(sender))}:[/bold green] ")
+                prefix.append(str(message_text))
+                chat_log.write(prefix)
             else:
-                chat_log.write(f"[bold green]{escape(str(sender))} → {escape(str(recipient))}:[/bold green] {escape(str(message_text))}")
+                prefix = Text.from_markup(f"[bold green]{escape(str(sender))} → {escape(str(recipient))}:[/bold green] ")
+                prefix.append(str(message_text))
+                chat_log.write(prefix)
             chat_log.scroll_end(animate=False)
 
         # Refresh Kanban board whenever a task or review event occurs
@@ -720,7 +728,9 @@ class OrchestratorTUI(App):
         if text:
             target_role = str(role_select.value)
             chat_log = self.query_one("#chat-log", RichLog)
-            chat_log.write(f"[bold cyan]Me → {escape(target_role)}:[/bold cyan] {escape(text)}")
+            me_prefix = Text.from_markup(f"[bold cyan]Me → {escape(target_role)}:[/bold cyan] ")
+            me_prefix.append(text)
+            chat_log.write(me_prefix)
             chat_log.scroll_end(animate=False)
             await self.engine.handle_human_intervention(HumanInterventionCommand(
                 workflow_run_id=self.workflow_run.run_id,

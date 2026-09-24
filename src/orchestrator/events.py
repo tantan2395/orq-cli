@@ -1,9 +1,12 @@
 """Event bus and typed orchestration event definitions."""
 
 import asyncio
+import logging
 import uuid
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 from orchestrator.models import OrchestrationEvent, utc_now_iso
+
+logger = logging.getLogger(__name__)
 
 
 class EventBus:
@@ -36,8 +39,8 @@ class EventBus:
         for cb in self._callbacks:
             try:
                 await cb(event)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.exception("Error in EventBus callback: %s", e)
 
 
 def create_event(

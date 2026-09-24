@@ -144,3 +144,38 @@ async def test_tui_initial_task_from_cli():
         assert any("Audit security configuration" in line for line in lines)
 
 
+@pytest.mark.asyncio
+async def test_tui_agent_activity_message_renders_in_chat_and_activity():
+    """Verify that agent_activity events of type agent_message render cleanly in chat and activity log without TypeError."""
+    from orchestrator.events import create_event
+
+    app = OrchestratorTUI()
+    async with app.run_test() as pilot:
+        chat_log = app.query_one("#chat-log", RichLog)
+        activity_log = app.query_one("#activity-log", RichLog)
+
+        response_text = "Orq currently exposes seven MCP tools: [1] agents_handoff, [2] review_request"
+        evt = create_event(
+            workflow_run_id=app.workflow_run.run_id,
+            event_type="agent_activity",
+            role="decision_maker",
+            payload={
+                "type": "agent_message",
+                "content": response_text,
+            },
+        )
+        await app.events.publish(evt)
+        app.action_switch_tab_4()
+        await pilot.pause()
+
+        # Check chat_log lines
+        chat_lines = [line.text for line in chat_log.lines]
+        assert any("Orq currently exposes seven MCP tools" in line for line in chat_lines), f"Expected response in chat_log: {chat_lines}"
+        assert any("decision_maker:" in line for line in chat_lines)
+
+        # Check activity_log lines
+        activity_lines = [line.text for line in activity_log.lines]
+        assert any("Orq currently exposes seven MCP tools" in line for line in activity_lines), f"Expected response in activity_log: {activity_lines}"
+
+
+
