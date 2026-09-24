@@ -275,7 +275,7 @@ class OrchestrationEngine:
             type="human_intervention",
             requested_by="human",
             target_role=cmd.target_role,
-            status="completed",
+            status="queued",
             payload=cmd.model_dump(),
         )
         await self.db.save_task(task)

@@ -35,3 +35,24 @@ async def test_tui_compose_and_mount():
         chat_input = app.query_one("#chat-input", Input)
         assert chat_role is not None
         assert chat_input is not None
+
+
+@pytest.mark.asyncio
+async def test_tui_chat_submit():
+    """Verify that submitting text in chat sends a human intervention command."""
+    app = OrchestratorTUI()
+    async with app.run_test() as pilot:
+        chat_input = app.query_one("#chat-input", Input)
+        chat_input.value = "Focus on auth tests first"
+        await chat_input.action_submit()
+        await pilot.pause()
+
+        # Input should be cleared after submit
+        assert chat_input.value == ""
+
+        # Verify task was saved in DB
+        tasks = await app.db.list_tasks(app.workflow_run.run_id)
+        human_tasks = [t for t in tasks if t.type == "human_intervention"]
+        assert len(human_tasks) >= 1
+        assert human_tasks[-1].payload.get("message") == "Focus on auth tests first"
+        assert human_tasks[-1].status == "queued"

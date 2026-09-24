@@ -301,6 +301,10 @@ class OrchestratorTUI(App):
             await self._refresh_tasks()
         if event.type == "artifact_registered":
             await self._refresh_artifacts()
+        if event.type == "agent_message_sent":
+            payload = event.payload
+            chat_log = self.query_one("#chat-log", RichLog)
+            chat_log.write(f"[bold green]{escape(str(event.role))} → {escape(str(payload.get('target')))}:[/bold green] {escape(str(payload.get('content')))}")
 
     def _update_header(self) -> None:
         if not self.workflow_run:
@@ -448,19 +452,29 @@ class OrchestratorTUI(App):
             self.workflow_run = await self.db.get_workflow_run(self.workflow_run.run_id)
             self._update_header()
         elif event.button.id == "btn-chat-send":
-            chat_input = self.query_one("#chat-input", Input)
-            role_select = self.query_one("#chat-role-select", Select)
-            text = chat_input.value.strip()
-            if text:
-                target_role = str(role_select.value)
-                chat_log = self.query_one("#chat-log", RichLog)
-                chat_log.write(f"[bold cyan]Me → {escape(target_role)}:[/bold cyan] {escape(text)}")
-                await self.engine.handle_human_intervention(HumanInterventionCommand(
-                    workflow_run_id=self.workflow_run.run_id,
-                    target_role=target_role,
-                    message=text,
-                ))
-                chat_input.value = ""
+            await self._send_chat_message()
+
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle Enter key pressed in input fields."""
+        if event.input.id == "chat-input":
+            await self._send_chat_message()
+
+    async def _send_chat_message(self) -> None:
+        if not self.workflow_run:
+            return
+        chat_input = self.query_one("#chat-input", Input)
+        role_select = self.query_one("#chat-role-select", Select)
+        text = chat_input.value.strip()
+        if text:
+            target_role = str(role_select.value)
+            chat_log = self.query_one("#chat-log", RichLog)
+            chat_log.write(f"[bold cyan]Me → {escape(target_role)}:[/bold cyan] {escape(text)}")
+            await self.engine.handle_human_intervention(HumanInterventionCommand(
+                workflow_run_id=self.workflow_run.run_id,
+                target_role=target_role,
+                message=text,
+            ))
+            chat_input.value = ""
 
     async def action_toggle_pause(self) -> None:
         """Toggles between paused and running states."""

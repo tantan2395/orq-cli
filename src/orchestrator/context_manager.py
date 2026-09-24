@@ -35,7 +35,9 @@ class ContextManager:
         contract_text = self.load_role_contract(role_config.prompt_file)
 
         payload = task.payload
-        bounded_task = payload.get("task") or payload.get("summary") or task.type
+        bounded_task = payload.get("task") or payload.get("summary") or payload.get("message") or task.type
+        if task.type == "human_intervention" and payload.get("message"):
+            bounded_task = f"[DIRECT HUMAN OPERATOR INSTRUCTION]\n{payload.get('message')}"
         constraints = payload.get("constraints", [])
         acceptance_criteria = payload.get("acceptance_criteria", [])
         artifacts = payload.get("artifacts", [])
