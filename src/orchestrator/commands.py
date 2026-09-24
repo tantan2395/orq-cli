@@ -14,7 +14,7 @@ class BaseCommand(BaseModel):
 class HandoffCommand(BaseCommand):
     """Formal transfer of execution responsibility between roles."""
     idempotency_key: Optional[str] = Field(default=None, description="Idempotency key scoped to workflow_run_id")
-    requested_by: str = Field(description="Role initiating the handoff")
+    requested_by: str = Field(default="agent", description="Role initiating the handoff")
     target_role: str = Field(description="Target role to assume responsibility")
     task: str = Field(description="Specific bounded task to execute")
     context: str = Field(default="", description="Relevant context and background")
@@ -26,7 +26,7 @@ class HandoffCommand(BaseCommand):
 class ReviewRequestCommand(BaseCommand):
     """Formal request from an implementer role for independent review."""
     idempotency_key: Optional[str] = Field(default=None)
-    requested_by: str = Field(description="Implementer role name")
+    requested_by: str = Field(default="developer", description="Implementer role name")
     target_role: str = Field(default="code_reviewer", description="Reviewer role name")
     summary: str = Field(description="Summary of changes and deliverables")
     diff_or_patch: Optional[str] = Field(default=None, description="Commit hash, patch path, or diff")

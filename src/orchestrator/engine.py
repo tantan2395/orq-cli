@@ -385,3 +385,53 @@ class OrchestrationEngine:
             stage_id=run.current_stage,
             payload={"final_stage": run.current_stage},
         ))
+
+    async def handle_ipc_command(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Routes an inbound IPC method call to the appropriate engine command handler."""
+        try:
+            if method == "agents_handoff":
+                cmd = HandoffCommand(**params)
+                task = await self.handle_handoff(cmd)
+                return {"accepted": True, "task_id": task.task_id, "status": task.status}
+
+            elif method == "review_request":
+                cmd = ReviewRequestCommand(**params)
+                task = await self.handle_review_request(cmd)
+                return {"accepted": True, "task_id": task.task_id, "status": task.status}
+
+            elif method == "review_decision":
+                cmd = ReviewDecisionCommand(**params)
+                task = await self.handle_review_decision(cmd)
+                return {"accepted": True, "task_id": task.task_id, "status": task.status}
+
+            elif method == "agents_message":
+                cmd = AgentMessageCommand(**params)
+                task = await self.handle_message(cmd)
+                return {"accepted": True, "task_id": task.task_id}
+
+            elif method == "workflow_status":
+                run_id = params.get("workflow_run_id", "")
+                run = await self.db.get_workflow_run(run_id)
+                if not run:
+                    return {"error": f"Workflow run '{run_id}' not found", "status": "not_found"}
+                return {"run_id": run.run_id, "current_stage": run.current_stage, "status": run.status}
+
+            elif method == "workflow_pause":
+                await self.handle_control(WorkflowControlCommand(
+                    workflow_run_id=params["workflow_run_id"],
+                    action="pause",
+                    reason=params.get("reason"),
+                ))
+                return {"accepted": True, "status": "paused"}
+
+            elif method == "workflow_resume":
+                await self.handle_control(WorkflowControlCommand(
+                    workflow_run_id=params["workflow_run_id"],
+                    action="resume",
+                ))
+                return {"accepted": True, "status": "running"}
+
+            else:
+                return {"error": f"Unknown method '{method}'", "accepted": False}
+        except Exception as e:
+            return {"error": str(e), "accepted": False}
