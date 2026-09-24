@@ -15,7 +15,8 @@ def test_codex_adapter_build_command():
     )
 
     assert cmd[0] == "/usr/bin/codex"
-    assert cmd[1] == "exec"
+    assert cmd[1] == "-C"
+    assert cmd[3] == "exec"
     assert "--json" in cmd
     assert "-m" in cmd
     assert "gpt-6-astra" in cmd
@@ -34,9 +35,10 @@ def test_codex_adapter_build_command_with_resume():
         session_id="01a0a43e-4c6d",
     )
 
-    assert cmd[1] == "exec"
-    assert cmd[2] == "resume"
-    assert cmd[3] == "01a0a43e-4c6d"
+    assert cmd[1] == "-C"
+    assert cmd[3] == "exec"
+    assert cmd[4] == "resume"
+    assert cmd[5] == "01a0a43e-4c6d"
 
 
 def test_codex_adapter_parse_lines():

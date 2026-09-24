@@ -25,7 +25,11 @@ class CodexAdapter(BaseAgentAdapter):
         session_id: Optional[str] = None,
     ) -> List[str]:
         """Constructs CLI arguments for codex exec."""
-        cmd = [self.binary_path, "exec"]
+        cmd = [
+            self.binary_path,
+            "-C", os.path.abspath(workspace_root),
+            "exec",
+        ]
         effective_session = session_id or self.active_session_id
         if effective_session:
             cmd.extend(["resume", effective_session])
@@ -34,7 +38,6 @@ class CodexAdapter(BaseAgentAdapter):
             "--json",
             "-m", model,
             "-c", f'model_reasoning_effort="{reasoning.value}"',
-            "-C", os.path.abspath(workspace_root),
             "--dangerously-bypass-approvals-and-sandbox",
             prompt,
         ])
