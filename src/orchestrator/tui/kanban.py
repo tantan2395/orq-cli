@@ -46,6 +46,7 @@ class TaskCard(Static):
         def __init__(self, task: OrchestrationTask) -> None:
             super().__init__()
             self.task = task
+            self.orch_task = task
 
     def __init__(self, task: OrchestrationTask, **kwargs) -> None:
         super().__init__(**kwargs)

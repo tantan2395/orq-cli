@@ -58,27 +58,27 @@ class TaskDetailModal(ModalScreen[Optional[Dict[str, Any]]]):
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
-        self.task = task
+        self.orch_task = task
         self.dependencies = dependencies or []
         self.dependents = dependents or []
 
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="detail-container"):
-            title = self.task.title or self.task.task_id
+            title = self.orch_task.title or self.orch_task.task_id
             yield Label(f"[bold cyan]Task Details:[/bold cyan] [bold white]{escape(title)}[/bold white]", id="detail-header")
 
             # Meta Row
             meta_text = (
-                f"[bold]ID:[/bold] [dim]{self.task.task_id}[/dim]  |  "
-                f"[bold]Role:[/bold] [yellow]{self.task.target_role}[/yellow]  |  "
-                f"[bold]Column:[/bold] [cyan]{self.task.kanban_column.upper()}[/cyan]  |  "
-                f"[bold]Status:[/bold] [green]{self.task.status}[/green]"
+                f"[bold]ID:[/bold] [dim]{self.orch_task.task_id}[/dim]  |  "
+                f"[bold]Role:[/bold] [yellow]{self.orch_task.target_role}[/yellow]  |  "
+                f"[bold]Column:[/bold] [cyan]{self.orch_task.kanban_column.upper()}[/cyan]  |  "
+                f"[bold]Status:[/bold] [green]{self.orch_task.status}[/green]"
             )
             yield Static(meta_text, classes="detail-section")
 
             # Objective / Scope
             yield Label("Objective / Description:", classes="detail-label")
-            desc = self.task.description or "[dim]No detailed objective specified.[/dim]"
+            desc = self.orch_task.description or "[dim]No detailed objective specified.[/dim]"
             yield Static(f"[white]{escape(desc)}[/white]", classes="detail-section")
 
             # Dependencies
@@ -98,14 +98,14 @@ class TaskDetailModal(ModalScreen[Optional[Dict[str, Any]]]):
             yield Static(down_text, classes="detail-section")
 
             # Acceptance Criteria
-            ac = self.task.payload.get("acceptance_criteria") if isinstance(self.task.payload, dict) else None
+            ac = self.orch_task.payload.get("acceptance_criteria") if isinstance(self.orch_task.payload, dict) else None
             if ac and isinstance(ac, list) and len(ac) > 0:
                 yield Label("Acceptance Criteria:", classes="detail-label")
                 ac_text = "\n".join(f"  ✓ {escape(str(item))}" for item in ac)
                 yield Static(ac_text, classes="detail-section")
 
             # Artifacts
-            artifacts = self.task.payload.get("artifacts") if isinstance(self.task.payload, dict) else None
+            artifacts = self.orch_task.payload.get("artifacts") if isinstance(self.orch_task.payload, dict) else None
             if artifacts and isinstance(artifacts, list) and len(artifacts) > 0:
                 yield Label("Artifacts:", classes="detail-label")
                 art_text = "\n".join(f"  • {escape(str(item))}" for item in artifacts)
@@ -114,24 +114,24 @@ class TaskDetailModal(ModalScreen[Optional[Dict[str, Any]]]):
             # Action Buttons
             with Horizontal(id="detail-actions"):
                 yield Button("Chat", id="btn-modal-chat", variant="primary")
-                if self.task.kanban_column not in ["in_progress", "done"]:
+                if self.orch_task.kanban_column not in ["in_progress", "done"]:
                     yield Button("Start", id="btn-modal-start", variant="success")
-                if self.task.kanban_column != "blocked":
+                if self.orch_task.kanban_column != "blocked":
                     yield Button("Block", id="btn-modal-block", variant="warning")
-                if self.task.status not in ["completed", "cancelled"]:
+                if self.orch_task.status not in ["completed", "cancelled"]:
                     yield Button("Cancel", id="btn-modal-cancel", variant="error")
                 yield Button("Close", id="btn-modal-close")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
         if button_id == "btn-modal-chat":
-            self.dismiss({"action": "chat", "role": self.task.target_role, "task_id": self.task.task_id})
+            self.dismiss({"action": "chat", "role": self.orch_task.target_role, "task_id": self.orch_task.task_id})
         elif button_id == "btn-modal-start":
-            self.dismiss({"action": "start", "task_id": self.task.task_id})
+            self.dismiss({"action": "start", "task_id": self.orch_task.task_id})
         elif button_id == "btn-modal-block":
-            self.dismiss({"action": "block", "task_id": self.task.task_id})
+            self.dismiss({"action": "block", "task_id": self.orch_task.task_id})
         elif button_id == "btn-modal-cancel":
-            self.dismiss({"action": "cancel", "task_id": self.task.task_id})
+            self.dismiss({"action": "cancel", "task_id": self.orch_task.task_id})
         else:
             self.dismiss(None)
 

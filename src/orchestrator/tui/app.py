@@ -610,8 +610,11 @@ class OrchestratorTUI(App):
 
     async def on_task_card_selected(self, message: TaskCard.Selected) -> None:
         """Opens TaskDetailModal when a card is clicked or selected."""
-        deps = await self.db.get_task_dependencies(message.task.task_id)
-        dependents = await self.db.get_task_dependents(message.task.task_id)
+        task_obj = getattr(message, "orch_task", None) or getattr(message, "task", None)
+        if not task_obj:
+            return
+        deps = await self.db.get_task_dependencies(task_obj.task_id)
+        dependents = await self.db.get_task_dependents(task_obj.task_id)
 
         def on_detail_action(res: Optional[Dict[str, Any]]) -> None:
             if not res:
@@ -628,7 +631,7 @@ class OrchestratorTUI(App):
             elif act in ["start", "block", "cancel"]:
                 self.run_worker(self._execute_task_lifecycle(res["task_id"], act))
 
-        self.push_screen(TaskDetailModal(task=message.task, dependencies=deps, dependents=dependents), on_detail_action)
+        self.push_screen(TaskDetailModal(task=task_obj, dependencies=deps, dependents=dependents), on_detail_action)
 
     async def _execute_task_lifecycle(self, task_id: str, action: str) -> None:
         if not self.workflow_run:

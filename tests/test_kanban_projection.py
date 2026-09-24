@@ -210,3 +210,50 @@ async def test_task_card_mounting_and_render_all_types():
         cards_done = done_col.query_one("#cards-done")
         assert len(cards_done.children) == 1
         assert cards_done.children[0].orch_task.task_id == "t_review_dec"
+
+
+@pytest.mark.asyncio
+async def test_task_detail_modal_instantiation_and_actions():
+    """Verify that TaskDetailModal mounts without AttributeError and emits correct actions."""
+    from textual.app import App
+    from textual.widgets import Button
+    from orchestrator.models import OrchestrationTask
+    from orchestrator.tui.modals import TaskDetailModal
+
+    sample_task = OrchestrationTask(
+        task_id="t_modal_test",
+        workflow_run_id="run_modal",
+        type="task_item",
+        requested_by="decision_maker",
+        target_role="developer",
+        status="running",
+        kanban_column="in_progress",
+        title="Test Task for Modal",
+        description="Verify detail modal opens without crashing",
+        payload={"acceptance_criteria": ["Criteria 1", "Criteria 2"], "artifacts": ["doc.md"]},
+    )
+
+    result_holder = []
+
+    class ModalTestApp(App):
+        def on_mount(self) -> None:
+            def on_close(res):
+                result_holder.append(res)
+            self.push_screen(
+                TaskDetailModal(task=sample_task, dependencies=["dep_1"], dependents=["down_1"]),
+                on_close,
+            )
+
+    app = ModalTestApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        modal = app.screen
+        assert isinstance(modal, TaskDetailModal)
+        assert modal.orch_task.task_id == "t_modal_test"
+
+        # Click close button
+        btn_close = modal.query_one("#btn-modal-close", Button)
+        btn_close.press()
+        await pilot.pause()
+        assert len(result_holder) == 1
+        assert result_holder[0] is None
