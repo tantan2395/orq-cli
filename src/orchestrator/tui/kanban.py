@@ -49,15 +49,51 @@ class TaskCard(Static):
 
     def __init__(self, task: OrchestrationTask, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.task = task
+        self.orch_task = task
         self.can_focus = True
 
     def on_mount(self) -> None:
         self.render_card()
 
     def render_card(self) -> None:
-        task = self.task
-        title = task.title or task.task_id
+        task = self.orch_task
+        title = task.title
+        desc = task.description or ""
+
+        # Fallback extraction from payload for tasks created without explicit title/desc
+        payload = task.payload or {}
+        if not title:
+            if task.type == "handoff":
+                spec = payload.get("handoff_spec") or {}
+                title = spec.get("objective") or "Handoff Implementation"
+            elif task.type == "review_request":
+                spec = payload.get("review_spec") or {}
+                title = f"Review: {spec.get('title', 'Pending Changes')}"
+            elif task.type == "review_decision":
+                decision = payload.get("decision") or (task.result or {}).get("decision") or "VERDICT"
+                title = f"Review Verdict: {str(decision).upper()}"
+            elif task.type == "human_intervention":
+                msg = payload.get("message") or ""
+                first_line = msg.strip().split("\n")[0] if msg else ""
+                title = f"Operator: {first_line[:50]}" if first_line else "Operator Instruction"
+            else:
+                title = task.task_id
+
+        if not desc:
+            if task.type == "handoff":
+                spec = payload.get("handoff_spec") or {}
+                deliverables = spec.get("deliverables") or []
+                desc = ", ".join(deliverables) if deliverables else ""
+            elif task.type == "review_request":
+                spec = payload.get("review_spec") or {}
+                desc = spec.get("diff_summary") or ""
+            elif task.type == "review_decision":
+                desc = payload.get("summary") or (task.result or {}).get("summary") or ""
+            elif task.type == "human_intervention":
+                msg = payload.get("message") or ""
+                lines = msg.strip().split("\n")
+                desc = " ".join(lines[1:]).strip() if len(lines) > 1 else ""
+
         role = task.target_role or "unassigned"
         stage = task.stage_id or ""
         column = task.kanban_column or "ready"
@@ -70,7 +106,6 @@ class TaskCard(Static):
         elif role == "code_reviewer":
             role_color = "green"
 
-        desc = task.description or ""
         if len(desc) > 80:
             desc = desc[:77] + "..."
 
@@ -94,10 +129,10 @@ class TaskCard(Static):
         self.update("\n".join(lines))
 
     def on_click(self) -> None:
-        self.post_message(self.Selected(self.task))
+        self.post_message(self.Selected(self.orch_task))
 
     def key_enter(self) -> None:
-        self.post_message(self.Selected(self.task))
+        self.post_message(self.Selected(self.orch_task))
 
 
 class KanbanColumn(Vertical):
@@ -177,6 +212,9 @@ class KanbanBoard(Container):
     def refresh_board(self, tasks: List[OrchestrationTask]) -> None:
         grouped: dict[str, List[OrchestrationTask]] = {col_id: [] for col_id, _, _ in KANBAN_COLUMNS}
         for t in tasks:
+            # Filter out non-work items such as raw conversational chat messages
+            if t.type == "agent_message":
+                continue
             col = t.kanban_column or "ready"
             if col in grouped:
                 grouped[col].append(t)

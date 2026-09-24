@@ -1,6 +1,7 @@
 """Textual TUI for the Agent Orchestration Runtime."""
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import uuid
@@ -8,6 +9,8 @@ from rich.markdown import Markdown
 from rich.markup import escape
 from rich.panel import Panel
 from rich.text import Text
+
+logger = logging.getLogger(__name__)
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
@@ -602,8 +605,8 @@ class OrchestratorTUI(App):
         try:
             board = self.query_one("#kanban-board", KanbanBoard)
             board.refresh_board(tasks)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception("Error refreshing kanban board: %s", e)
 
     async def on_task_card_selected(self, message: TaskCard.Selected) -> None:
         """Opens TaskDetailModal when a card is clicked or selected."""

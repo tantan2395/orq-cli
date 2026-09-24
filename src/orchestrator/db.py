@@ -96,10 +96,11 @@ class Database:
                 )
             """)
 
-            # Unique constraint: workflow_run_id + idempotency_key (ignoring NULLs)
+            # Unique constraint: workflow_run_id + type + idempotency_key (ignoring NULLs)
+            await db.execute("DROP INDEX IF EXISTS idx_tasks_run_idempotency")
             await db.execute("""
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_run_idempotency
-                ON tasks(workflow_run_id, idempotency_key)
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_run_type_idempotency
+                ON tasks(workflow_run_id, type, idempotency_key)
                 WHERE idempotency_key IS NOT NULL
             """)
 
@@ -301,15 +302,18 @@ class Database:
                 return self._row_to_task(row)
 
     async def get_task_by_idempotency(
-        self, workflow_run_id: str, idempotency_key: str
+        self, workflow_run_id: str, idempotency_key: str, task_type: Optional[str] = None
     ) -> Optional[OrchestrationTask]:
-        """Finds existing task with matching workflow_run_id and idempotency_key."""
+        """Finds existing task with matching workflow_run_id, idempotency_key, and optionally task_type."""
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute(
-                "SELECT * FROM tasks WHERE workflow_run_id = ? AND idempotency_key = ?",
-                (workflow_run_id, idempotency_key)
-            ) as cursor:
+            if task_type:
+                query = "SELECT * FROM tasks WHERE workflow_run_id = ? AND idempotency_key = ? AND type = ?"
+                params = (workflow_run_id, idempotency_key, task_type)
+            else:
+                query = "SELECT * FROM tasks WHERE workflow_run_id = ? AND idempotency_key = ?"
+                params = (workflow_run_id, idempotency_key)
+            async with db.execute(query, params) as cursor:
                 row = await cursor.fetchone()
                 if not row:
                     return None

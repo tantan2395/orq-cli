@@ -136,3 +136,77 @@ async def test_tui_kanban_rendering_and_tabs():
         app.action_switch_tab_4()
         await pilot.pause()
         assert app.query_one("#tabs").active == "tab-activity"
+
+
+@pytest.mark.asyncio
+async def test_task_card_mounting_and_render_all_types():
+    """Verify that TaskCard mounts and renders without AttributeError for all task types, and filters chat."""
+    from textual.app import App, ComposeResult
+    from orchestrator.models import OrchestrationTask
+
+    class KanbanTestApp(App):
+        def compose(self) -> ComposeResult:
+            yield KanbanBoard(id="test-board")
+
+    tasks = [
+        OrchestrationTask(
+            task_id="t_handoff",
+            workflow_run_id="run_1",
+            type="handoff",
+            requested_by="decision_maker",
+            target_role="developer",
+            kanban_column="ready",
+            payload={"handoff_spec": {"objective": "Build IoT Telemetry Endpoint"}},
+        ),
+        OrchestrationTask(
+            task_id="t_review_req",
+            workflow_run_id="run_1",
+            type="review_request",
+            requested_by="developer",
+            target_role="code_reviewer",
+            kanban_column="review",
+            payload={"review_spec": {"title": "Telemetry Controller Diff", "diff_summary": "Added 3 routes"}},
+        ),
+        OrchestrationTask(
+            task_id="t_review_dec",
+            workflow_run_id="run_1",
+            type="review_decision",
+            requested_by="code_reviewer",
+            target_role="engine",
+            kanban_column="done",
+            payload={"decision": "changes_requested", "summary": "Fix validation errors"},
+        ),
+        OrchestrationTask(
+            task_id="t_chat",
+            workflow_run_id="run_1",
+            type="agent_message",
+            requested_by="decision_maker",
+            target_role="human",
+            kanban_column="done",
+            payload={"message": "Conversational message that should not be on board"},
+        ),
+    ]
+
+    app = KanbanTestApp()
+    async with app.run_test() as pilot:
+        board = app.query_one("#test-board", KanbanBoard)
+        board.refresh_board(tasks)
+        await pilot.pause()
+
+        # Check Ready column has t_handoff
+        ready_col = board.columns["ready"]
+        cards_ready = ready_col.query_one("#cards-ready")
+        assert len(cards_ready.children) == 1
+        assert cards_ready.children[0].orch_task.task_id == "t_handoff"
+
+        # Check Review column has t_review_req
+        review_col = board.columns["review"]
+        cards_review = review_col.query_one("#cards-review")
+        assert len(cards_review.children) == 1
+        assert cards_review.children[0].orch_task.task_id == "t_review_req"
+
+        # Check Done column has t_review_dec (t_chat must be filtered out!)
+        done_col = board.columns["done"]
+        cards_done = done_col.query_one("#cards-done")
+        assert len(cards_done.children) == 1
+        assert cards_done.children[0].orch_task.task_id == "t_review_dec"

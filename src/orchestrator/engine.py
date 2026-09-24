@@ -121,7 +121,7 @@ class OrchestrationEngine:
     async def handle_handoff(self, cmd: HandoffCommand) -> OrchestrationTask:
         """Processes an asynchronous handoff command with run-scoped idempotency."""
         if cmd.idempotency_key:
-            existing = await self.db.get_task_by_idempotency(cmd.workflow_run_id, cmd.idempotency_key)
+            existing = await self.db.get_task_by_idempotency(cmd.workflow_run_id, cmd.idempotency_key, task_type="handoff")
             if existing:
                 return existing
 
@@ -130,15 +130,22 @@ class OrchestrationEngine:
             raise ValueError(f"Workflow run '{cmd.workflow_run_id}' not found.")
 
         task_id = f"task_{uuid.uuid4().hex[:10]}"
+        raw_task = getattr(cmd, "task", "") or "Handoff Implementation"
+        title = raw_task.strip().split("\n")[0][:80]
+        desc = raw_task.strip()
+
         task = OrchestrationTask(
             task_id=task_id,
             workflow_run_id=cmd.workflow_run_id,
             stage_id=run.current_stage,
             idempotency_key=cmd.idempotency_key,
+            title=title,
+            description=desc,
             type="handoff",
             requested_by=cmd.requested_by,
             target_role=cmd.target_role,
             status="queued",
+            kanban_column="ready",
             created_at=utc_now_iso(),
             payload=cmd.model_dump(),
         )
@@ -175,7 +182,7 @@ class OrchestrationEngine:
     async def handle_review_request(self, cmd: ReviewRequestCommand) -> OrchestrationTask:
         """Processes a review request command with run-scoped idempotency."""
         if cmd.idempotency_key:
-            existing = await self.db.get_task_by_idempotency(cmd.workflow_run_id, cmd.idempotency_key)
+            existing = await self.db.get_task_by_idempotency(cmd.workflow_run_id, cmd.idempotency_key, task_type="review_request")
             if existing:
                 return existing
 
@@ -184,19 +191,35 @@ class OrchestrationEngine:
             raise ValueError(f"Workflow run '{cmd.workflow_run_id}' not found.")
 
         task_id = f"task_{uuid.uuid4().hex[:10]}"
+        raw_summary = getattr(cmd, "summary", "") or "Implementation Review"
+        title = f"Review: {raw_summary.strip().split(chr(10))[0]}"[:80]
+        desc = getattr(cmd, "diff_or_patch", "") or raw_summary
+
         task = OrchestrationTask(
             task_id=task_id,
             workflow_run_id=cmd.workflow_run_id,
             stage_id=run.current_stage,
             idempotency_key=cmd.idempotency_key,
+            title=title,
+            description=desc,
             type="review_request",
             requested_by=cmd.requested_by,
             target_role=cmd.target_role,
             status="queued",
+            kanban_column="review",
             created_at=utc_now_iso(),
             payload=cmd.model_dump(),
         )
         await self.db.save_task(task)
+
+        # Mark pending / active tasks for the requesting role as completed
+        existing_tasks = await self.db.list_tasks(run.run_id)
+        for t in existing_tasks:
+            if t.task_id != task.task_id and t.target_role == cmd.requested_by and t.status in ["queued", "running"]:
+                t.status = "completed"
+                t.kanban_column = "done"
+                t.completed_at = utc_now_iso()
+                await self.db.save_task(t)
 
         await self.events.publish(create_event(
             workflow_run_id=run.run_id,
@@ -219,7 +242,7 @@ class OrchestrationEngine:
     async def handle_review_decision(self, cmd: ReviewDecisionCommand) -> OrchestrationTask:
         """Processes a reviewer's decision and evaluates state machine branch."""
         if cmd.idempotency_key:
-            existing = await self.db.get_task_by_idempotency(cmd.workflow_run_id, cmd.idempotency_key)
+            existing = await self.db.get_task_by_idempotency(cmd.workflow_run_id, cmd.idempotency_key, task_type="review_decision")
             if existing:
                 return existing
 
@@ -228,19 +251,26 @@ class OrchestrationEngine:
             raise ValueError(f"Workflow run '{cmd.workflow_run_id}' not found.")
 
         task_id = f"task_{uuid.uuid4().hex[:10]}"
+        dec_val = cmd.decision.value if hasattr(cmd.decision, "value") else str(cmd.decision)
+        title = f"Review Verdict: {dec_val.upper()}"
+        desc = cmd.summary or ""
+
         task = OrchestrationTask(
             task_id=task_id,
             workflow_run_id=cmd.workflow_run_id,
             stage_id=run.current_stage,
             idempotency_key=cmd.idempotency_key,
+            title=title,
+            description=desc,
             type="review_decision",
             requested_by=cmd.reviewer_role,
             target_role="engine",
             status="completed",
+            kanban_column="done",
             created_at=utc_now_iso(),
             completed_at=utc_now_iso(),
             payload=cmd.model_dump(),
-            result={"decision": cmd.decision.value, "summary": cmd.summary},
+            result={"decision": dec_val, "summary": cmd.summary},
         )
         await self.db.save_task(task)
 
@@ -250,22 +280,127 @@ class OrchestrationEngine:
             stage_id=run.current_stage,
             task_id=task.task_id,
             role=cmd.reviewer_role,
-            payload={"decision": cmd.decision.value, "summary": cmd.summary},
+            payload={"decision": dec_val, "summary": cmd.summary},
         ))
+
+        # Mark pending / active review_request tasks as completed
+        all_existing_tasks = await self.db.list_tasks(run.run_id)
+        for t in all_existing_tasks:
+            if t.type == "review_request" and t.status in ["queued", "running"]:
+                t.status = "completed"
+                t.kanban_column = "done"
+                t.completed_at = utc_now_iso()
+                await self.db.save_task(t)
 
         # Evaluate workflow transitions based on verdict
         definition = self.config.workflows.get(run.definition_id)
         if definition and run.current_stage in definition.stages:
             stage_cfg: StageConfig = definition.stages[run.current_stage]
-            if cmd.decision == ReviewDecision.APPROVED:
+            is_approved = dec_val == ReviewDecision.APPROVED.value or cmd.decision == ReviewDecision.APPROVED
+            is_changes = dec_val == ReviewDecision.CHANGES_REQUESTED.value or cmd.decision == ReviewDecision.CHANGES_REQUESTED
+
+            if is_approved:
                 if stage_cfg.next_on_approved:
                     if stage_cfg.next_on_approved.lower() == "done":
                         await self._complete_workflow(run)
                     else:
-                        await self._transition_stage(run, stage_cfg.next_on_approved)
-            elif cmd.decision == ReviewDecision.CHANGES_REQUESTED:
-                if stage_cfg.next_on_changes_requested:
-                    await self._transition_stage(run, stage_cfg.next_on_changes_requested)
+                        next_stage_name = stage_cfg.next_on_approved
+                        await self._transition_stage(run, next_stage_name)
+                        next_stage_cfg = definition.stages.get(next_stage_name)
+                        next_role = next_stage_cfg.role if next_stage_cfg else "decision_maker"
+
+                        # Auto-queue task for the final review stage to notify decision_maker
+                        signoff_task = OrchestrationTask(
+                            task_id=f"task_{uuid.uuid4().hex[:10]}",
+                            workflow_run_id=run.run_id,
+                            stage_id=next_stage_name,
+                            title="Final Acceptance & Sign-off",
+                            description=f"Review APPROVED by {cmd.reviewer_role}. Verify test suites pass and sign off on completion.\n\nSummary:\n{cmd.summary}",
+                            type="task_item",
+                            requested_by=cmd.reviewer_role,
+                            target_role=next_role,
+                            status="queued",
+                            kanban_column="ready",
+                            created_at=utc_now_iso(),
+                            payload={
+                                "review_verdict": dec_val,
+                                "summary": cmd.summary,
+                                "evidence": getattr(cmd, "evidence", []),
+                                "artifacts": getattr(cmd, "artifacts", []),
+                            },
+                        )
+                        await self.db.save_task(signoff_task)
+                        await self.events.publish(create_event(
+                            workflow_run_id=run.run_id,
+                            event_type="task_queued",
+                            stage_id=next_stage_name,
+                            task_id=signoff_task.task_id,
+                            role=next_role,
+                            payload={"type": "signoff", "summary": signoff_task.description},
+                        ))
+
+            elif is_changes:
+                # Count rework loops
+                all_tasks = await self.db.list_tasks(run.run_id)
+                rework_count = sum(
+                    1 for t in all_tasks
+                    if t.type == "review_decision"
+                    and (t.result or {}).get("decision") == ReviewDecision.CHANGES_REQUESTED.value
+                )
+                max_iterations = stage_cfg.max_loop_iterations or 3
+
+                if rework_count >= max_iterations:
+                    # Pause workflow and alert operator
+                    await self.handle_control(WorkflowControlCommand(
+                        workflow_run_id=run.run_id,
+                        action="pause",
+                        reason=f"Maximum review rework limit ({max_iterations} iterations) reached. Pausing for human operator review.",
+                    ))
+                    await self.events.publish(create_event(
+                        workflow_run_id=run.run_id,
+                        event_type="workflow_paused",
+                        stage_id=run.current_stage,
+                        role="engine",
+                        payload={"reason": f"Maximum review rework limit ({max_iterations}) reached."},
+                    ))
+                elif stage_cfg.next_on_changes_requested:
+                    next_stage_name = stage_cfg.next_on_changes_requested
+                    await self._transition_stage(run, next_stage_name)
+                    next_stage_cfg = definition.stages.get(next_stage_name)
+                    next_role = next_stage_cfg.role if next_stage_cfg else "developer"
+
+                    # Auto-queue fix task for developer
+                    findings_list = getattr(cmd, "findings", []) or []
+                    findings_text = "\n".join(f"- {f}" for f in findings_list) if findings_list else (cmd.summary or "")
+                    fix_task = OrchestrationTask(
+                        task_id=f"task_{uuid.uuid4().hex[:10]}",
+                        workflow_run_id=run.run_id,
+                        stage_id=next_stage_name,
+                        title=f"Fix Review Findings (Round {rework_count})",
+                        description=f"Reviewer requested changes:\n{cmd.summary}\n\nFindings:\n{findings_text}",
+                        type="task_item",
+                        requested_by=cmd.reviewer_role,
+                        target_role=next_role,
+                        status="queued",
+                        kanban_column="ready",
+                        created_at=utc_now_iso(),
+                        payload={
+                            "review_verdict": dec_val,
+                            "summary": cmd.summary,
+                            "findings": findings_list,
+                            "evidence": getattr(cmd, "evidence", []),
+                            "iteration": rework_count,
+                        },
+                    )
+                    await self.db.save_task(fix_task)
+                    await self.events.publish(create_event(
+                        workflow_run_id=run.run_id,
+                        event_type="task_queued",
+                        stage_id=next_stage_name,
+                        task_id=fix_task.task_id,
+                        role=next_role,
+                        payload={"type": "fix_review", "summary": fix_task.description},
+                    ))
 
         return task
 
@@ -294,13 +429,20 @@ class OrchestrationEngine:
     async def handle_human_intervention(self, cmd: HumanInterventionCommand) -> OrchestrationTask:
         """Injects direct human instruction/inquiry into a role session."""
         task_id = f"task_{uuid.uuid4().hex[:10]}"
+        run = await self.db.get_workflow_run(cmd.workflow_run_id)
+        first_line = cmd.message.strip().split("\n")[0] if cmd.message else "Operator Instruction"
         task = OrchestrationTask(
             task_id=task_id,
             workflow_run_id=cmd.workflow_run_id,
+            stage_id=run.current_stage if run else None,
+            title=f"Operator: {first_line[:50]}",
+            description=cmd.message.strip(),
             type="human_intervention",
             requested_by="human",
             target_role=cmd.target_role,
             status="queued",
+            kanban_column="ready",
+            created_at=utc_now_iso(),
             payload=cmd.model_dump(),
         )
         await self.db.save_task(task)
