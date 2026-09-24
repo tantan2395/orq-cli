@@ -65,3 +65,23 @@ def test_codex_adapter_parse_lines():
     parsed_delta = adapter._parse_line(delta_line)
     assert parsed_delta["type"] == "agent_message"
     assert "proceed" in parsed_delta["content"]
+
+    # Codex CLI nested event_msg: AgentMessage
+    agent_msg_line = '{"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "AgentMessage", "content": [{"type": "text", "text": "I am reviewing the architecture."}]}}}'
+    parsed_nested = adapter._parse_line(agent_msg_line)
+    assert parsed_nested["type"] == "agent_message"
+    assert "reviewing the architecture" in parsed_nested["content"]
+
+    # Codex CLI nested event_msg: McpToolCall
+    mcp_call_line = '{"type": "event_msg", "payload": {"type": "item_completed", "item": {"type": "McpToolCall", "server": "orchestrator", "tool": "workflow_pause", "arguments": {"reason": "Need repo path"}}}}'
+    parsed_mcp = adapter._parse_line(mcp_call_line)
+    assert parsed_mcp["type"] == "tool_call"
+    assert parsed_mcp["name"] == "orchestrator:workflow_pause"
+    assert parsed_mcp["args"]["reason"] == "Need repo path"
+
+    # Codex CLI response_item message
+    resp_line = '{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"text": "All checks passed."}]}}'
+    parsed_resp = adapter._parse_line(resp_line)
+    assert parsed_resp["type"] == "agent_message"
+    assert "All checks passed." in parsed_resp["content"]
+

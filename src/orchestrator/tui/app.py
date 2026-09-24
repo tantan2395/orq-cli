@@ -30,7 +30,7 @@ from orchestrator.dispatcher import Dispatcher
 from orchestrator.engine import OrchestrationEngine
 from orchestrator.events import EventBus, OrchestrationEvent
 from orchestrator.mcp.ipc import IPCServer
-from orchestrator.models import OrchestrationTask, StageConfig, WorkflowRun
+from orchestrator.models import OrchestrationTask, StageConfig, WorkflowRun, utc_now_iso
 
 
 class OrchestratorTUI(App):
@@ -284,7 +284,11 @@ class OrchestratorTUI(App):
             elif act_type == "tool_call":
                 log.write(f"[yellow]⚡ Tool Call:[/yellow] [bold]{escape(str(activity.get('name', '')))}[/bold]({escape(str(activity.get('args', '')))})")
             elif act_type == "agent_message":
-                log.write(activity.get("content", ""), markup=False)
+                msg_content = str(activity.get("content", ""))
+                log.write(msg_content, markup=False)
+                if event.role:
+                    chat_log = self.query_one("#chat-log", RichLog)
+                    chat_log.write(f"[bold green]{escape(str(event.role))}:[/bold green] {escape(msg_content)}")
             elif act_type == "error":
                 log.write(f"[bold red]✗ Error:[/bold red] {escape(str(activity.get('error', '')))}")
         elif event.type == "stage_started":
@@ -295,6 +299,21 @@ class OrchestratorTUI(App):
             log.write("\n[bold green]✓ Workflow Completed Successfully![/bold green]")
             self._update_header()
             self._render_dag()
+        elif event.type == "workflow_paused":
+            reason = event.payload.get("reason") or "Workflow paused by agent or operator"
+            log.write(f"\n[bold yellow]⏸ Workflow Paused:[/bold yellow] {escape(reason)}")
+            chat_log = self.query_one("#chat-log", RichLog)
+            chat_log.write(f"[bold yellow]⏸ {escape(str(event.role or 'Agent'))}:[/bold yellow] {escape(reason)}")
+            refreshed = await self.db.get_workflow_run(self.workflow_run.run_id)
+            if refreshed:
+                self.workflow_run = refreshed
+            self._update_header()
+        elif event.type == "workflow_resumed":
+            log.write("\n[bold green]▶ Workflow Resumed[/bold green]")
+            refreshed = await self.db.get_workflow_run(self.workflow_run.run_id)
+            if refreshed:
+                self.workflow_run = refreshed
+            self._update_header()
 
         # Refresh tasks & artifacts tabs
         if event.type in ["task_queued", "handoff_created", "review_requested", "review_completed"]:
@@ -376,9 +395,21 @@ class OrchestratorTUI(App):
         for a in arts:
             artifacts_log.write(f"[bold cyan]{escape(a.type.value.upper())}[/bold cyan]: {escape(a.path)} [dim]({escape(a.description or '')})[/dim]")
 
+    def _ensure_runner_loop(self) -> None:
+        """Ensures the background orchestrator execution loop is running."""
+        if self._loop_task is None or self._loop_task.done():
+            self._loop_task = asyncio.create_task(self._run_orchestrator_loop())
+
     async def _run_orchestrator_loop(self) -> None:
         """Autonomous execution loop coordinating turns in background."""
-        while self.workflow_run and self.workflow_run.status == "running":
+        while self.workflow_run and self.workflow_run.status not in ["completed", "failed", "cancelled"]:
+            if self.workflow_run.status == "paused":
+                await asyncio.sleep(0.5)
+                refreshed = await self.db.get_workflow_run(self.workflow_run.run_id)
+                if refreshed:
+                    self.workflow_run = refreshed
+                continue
+
             definition = self.config.workflows.get(self.workflow_run.definition_id)
             if not definition or self.workflow_run.current_stage not in definition.stages:
                 break
@@ -392,6 +423,13 @@ class OrchestratorTUI(App):
                 (t for t in reversed(tasks) if t.status == "queued" and (t.target_role == role_name or not t.target_role)),
                 None,
             )
+
+            # Check for direct human interventions queued for any role
+            if not pending_task:
+                human_task = next((t for t in reversed(tasks) if t.status == "queued" and t.type == "human_intervention"), None)
+                if human_task and human_task.target_role in self.config.roles:
+                    pending_task = human_task
+                    role_name = human_task.target_role
 
             if not pending_task:
                 pending_task = OrchestrationTask(
@@ -420,6 +458,12 @@ class OrchestratorTUI(App):
                 if self.workflow_run.status != "running":
                     break
 
+            # Mark queued task completed in DB if it was a stored task
+            if pending_task and pending_task.task_id and not pending_task.task_id.startswith("turn_task_"):
+                pending_task.status = "completed"
+                pending_task.completed_at = utc_now_iso()
+                await self.db.save_task(pending_task)
+
             # Refresh status
             refreshed = await self.db.get_workflow_run(self.workflow_run.run_id)
             if refreshed:
@@ -427,7 +471,7 @@ class OrchestratorTUI(App):
                 self._update_header()
                 self._render_dag()
 
-            if self.workflow_run.status == "completed":
+            if self.workflow_run.status in ["completed", "failed", "cancelled"]:
                 break
 
             await asyncio.sleep(1.0)
@@ -445,6 +489,7 @@ class OrchestratorTUI(App):
             ))
             self.workflow_run = await self.db.get_workflow_run(self.workflow_run.run_id)
             self._update_header()
+            self._ensure_runner_loop()
         elif event.button.id == "btn-cancel":
             await self.engine.handle_control(WorkflowControlCommand(
                 workflow_run_id=self.workflow_run.run_id, action="cancel_stage", target_id=self.workflow_run.current_stage
@@ -474,6 +519,16 @@ class OrchestratorTUI(App):
                 target_role=target_role,
                 message=text,
             ))
+            # If paused, auto-resume so the agent wakes up to respond to the human instruction
+            if self.workflow_run.status == "paused":
+                await self.engine.handle_control(WorkflowControlCommand(
+                    workflow_run_id=self.workflow_run.run_id, action="resume"
+                ))
+            refreshed = await self.db.get_workflow_run(self.workflow_run.run_id)
+            if refreshed:
+                self.workflow_run = refreshed
+            self._update_header()
+            self._ensure_runner_loop()
             chat_input.value = ""
 
     async def action_toggle_pause(self) -> None:
@@ -490,6 +545,7 @@ class OrchestratorTUI(App):
             ))
         self.workflow_run = await self.db.get_workflow_run(self.workflow_run.run_id)
         self._update_header()
+        self._ensure_runner_loop()
 
     async def action_next_tab(self) -> None:
         tabs = self.query_one("#tabs", TabbedContent)

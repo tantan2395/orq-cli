@@ -56,3 +56,21 @@ async def test_tui_chat_submit():
         assert len(human_tasks) >= 1
         assert human_tasks[-1].payload.get("message") == "Focus on auth tests first"
         assert human_tasks[-1].status == "queued"
+
+
+@pytest.mark.asyncio
+async def test_tui_chat_auto_resumes_paused_workflow():
+    """Verify that chatting while paused automatically resumes the workflow."""
+    app = OrchestratorTUI()
+    async with app.run_test() as pilot:
+        # Pause the workflow run first
+        app.workflow_run.status = "paused"
+        await app.db.save_workflow_run(app.workflow_run)
+
+        chat_input = app.query_one("#chat-input", Input)
+        chat_input.value = "Here is the answer you requested"
+        await chat_input.action_submit()
+        await pilot.pause()
+
+        assert app.workflow_run.status == "running"
+

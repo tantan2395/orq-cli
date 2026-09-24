@@ -102,36 +102,76 @@ class CodexAdapter(BaseAgentAdapter):
         if not isinstance(data, dict):
             return {"type": "agent_message", "content": str(data)}
 
-        # Capture native session / thread ID
-        sess = data.get("thread_id") or data.get("session_id") or data.get("id")
-        if sess and ("thread" in str(data.get("type", "")) or "session" in str(data.get("type", ""))):
+        top_type = str(data.get("type", "")).lower()
+        payload = data.get("payload", {}) if isinstance(data.get("payload"), dict) else {}
+
+        # 1. Capture native session / thread ID
+        sess = payload.get("id") or payload.get("session_id") or payload.get("thread_id") or data.get("thread_id") or data.get("session_id") or data.get("id")
+        if sess and ("thread" in top_type or "session" in top_type):
             self.active_session_id = str(sess)
 
-        ev_type = str(data.get("type", "")).lower()
+        # 2. Handle Codex CLI nested event_msg structure
+        if top_type == "event_msg":
+            p_type = str(payload.get("type", "")).lower()
+            if p_type == "item_completed":
+                item = payload.get("item", {}) if isinstance(payload.get("item"), dict) else {}
+                itype = str(item.get("type", "")).lower()
+                if itype == "agentmessage":
+                    contents = item.get("content", [])
+                    texts = [c.get("text", "") for c in contents if isinstance(c, dict) and c.get("text")]
+                    if texts:
+                        return {"type": "agent_message", "content": "\n".join(texts)}
+                elif itype == "mcptoolcall":
+                    return {
+                        "type": "tool_call",
+                        "name": f"{item.get('server', 'mcp')}:{item.get('tool', 'tool')}",
+                        "args": item.get("arguments", {}),
+                    }
+                elif itype == "commandexecution":
+                    cmd = item.get("command")
+                    if cmd:
+                        return {"type": "status", "status": f"Executed command: {cmd}"}
+            elif p_type == "task_complete":
+                last_msg = payload.get("last_agent_message")
+                if last_msg:
+                    return {"type": "agent_message", "content": str(last_msg)}
 
-        # Tool calls
-        if "tool_call" in ev_type or "tool_use" in ev_type:
+        # 3. Handle response_item
+        if top_type == "response_item":
+            p_type = str(payload.get("type", "")).lower()
+            if p_type == "message" and payload.get("role") == "assistant":
+                contents = payload.get("content", [])
+                texts = [c.get("text", "") for c in contents if isinstance(c, dict) and c.get("text")]
+                if texts:
+                    return {"type": "agent_message", "content": "\n".join(texts)}
+            elif "tool_call" in p_type:
+                return {
+                    "type": "tool_call",
+                    "name": payload.get("name") or "unknown_tool",
+                    "args": payload.get("input") or payload.get("args") or {},
+                }
+
+        # 4. Standard / legacy flat event structures
+        if "tool_call" in top_type or "tool_use" in top_type:
             return {
                 "type": "tool_call",
                 "name": data.get("name") or data.get("tool") or "unknown_tool",
                 "args": data.get("args") or data.get("input") or {},
             }
 
-        # Tool results
-        if "tool_result" in ev_type:
+        if "tool_result" in top_type:
             return {
                 "type": "tool_result",
                 "output": str(data.get("output") or data.get("content") or ""),
             }
 
-        # Status / Progress
-        if "status" in ev_type or "progress" in ev_type:
+        if "status" in top_type or "progress" in top_type:
             return {
                 "type": "status",
                 "status": data.get("status") or data.get("message") or str(data),
             }
 
-        # Text chunks / messages
+        # Text chunks / deltas
         if "delta" in data and isinstance(data["delta"], dict):
             text = data["delta"].get("text") or data["delta"].get("content") or ""
             if text:
