@@ -65,6 +65,7 @@ class Dispatcher:
             role=turn_context.role,
             agent_name=role_cfg.agent,
             workspace_root=workspace_root,
+            initial_native_id=role_cfg.seed_session_id,
         )
 
         await self.events.publish(create_event(

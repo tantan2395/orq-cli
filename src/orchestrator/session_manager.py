@@ -51,7 +51,12 @@ class SessionManager:
         return session
 
     async def update_native_id(
-        self, workflow_run_id: str, role: str, native_session_id: str
+        self,
+        workflow_run_id: str,
+        role: str,
+        native_session_id: str,
+        agent_name: str = "codex",
+        workspace_root: str = ".",
     ) -> Optional[AgentSession]:
         """Binds a captured native CLI ID (Codex UUID or Agy conversation ID) to the session."""
         session = await self.db.get_session(workflow_run_id, role)
@@ -59,7 +64,20 @@ class SessionManager:
             session.native_session_id = native_session_id
             session.last_activity = utc_now_iso()
             await self.db.save_session(session)
-            self._role_sessions[role] = native_session_id
+        else:
+            session = AgentSession(
+                id=f"sess_{uuid.uuid4().hex[:12]}",
+                workflow_run_id=workflow_run_id,
+                role=role,
+                agent_name=agent_name,
+                native_session_id=native_session_id,
+                workspace_root=workspace_root,
+                status="idle",
+                created_at=utc_now_iso(),
+                last_activity=utc_now_iso(),
+            )
+            await self.db.save_session(session)
+        self._role_sessions[role] = native_session_id
         return session
 
     async def set_status(

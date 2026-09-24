@@ -483,3 +483,114 @@ class QuestionModal(ModalScreen[Optional[Dict[str, Any]]]):
             "selected": answers[0]["selected"] if answers else [],
             "write_in": answers[0]["write_in"] if answers else "",
         })
+
+
+class AttachSessionModal(ModalScreen[Optional[Dict[str, str]]]):
+    """Modal dialog for attaching/binding an existing native CLI session (Codex UUID or Agy conv ID) to a role."""
+
+    DEFAULT_CSS = """
+    AttachSessionModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.7);
+    }
+    #session-container {
+        width: 75;
+        height: auto;
+        max-height: 90%;
+        background: #0f172a;
+        border: solid #06b6d4;
+        padding: 1 2;
+    }
+    #session-header {
+        text-style: bold;
+        color: #06b6d4;
+        margin-bottom: 0;
+        border-bottom: solid #334155;
+        padding-bottom: 0;
+    }
+    .session-field {
+        margin-bottom: 0;
+    }
+    #session-actions {
+        margin-top: 1;
+        height: 3;
+        align-horizontal: right;
+    }
+    Button {
+        margin-left: 1;
+    }
+    """
+
+    BINDINGS = [
+        ("escape", "dismiss_cancel", "Cancel"),
+    ]
+
+    def __init__(
+        self,
+        roles: List[str],
+        active_sessions: Dict[str, str],
+        selected_role: Optional[str] = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.roles = roles
+        self.active_sessions = active_sessions
+        self.selected_role = selected_role or (roles[0] if roles else "decision_maker")
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="session-container"):
+            yield Label("[bold cyan]Attach / Resume Native CLI Session[/bold cyan]", id="session-header")
+            yield Static(
+                "[dim]Bind an existing Codex session UUID or Agy conversation ID to a role.[/dim]"
+            )
+
+            options = [(r, r) for r in self.roles]
+            yield Label("Target Role:", classes="form-label")
+            yield Select(options, value=self.selected_role, id="select-session-role")
+
+            current_session = self.active_sessions.get(self.selected_role, "")
+            yield Label("Native Session ID / Conversation UUID:", classes="form-label")
+            yield Input(
+                value=current_session,
+                placeholder="e.g. 01a0d25d... (Codex) or 19a3b398... (Agy)",
+                id="input-session-id",
+                classes="session-field",
+            )
+
+            with Horizontal(id="session-actions"):
+                yield Button("Cancel", id="btn-cancel-session")
+                yield Button("Attach Session", id="btn-submit-session", variant="primary")
+
+    def action_dismiss_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "select-session-role":
+            selected_role = str(event.value)
+            inp = self.query_one("#input-session-id", Input)
+            inp.value = self.active_sessions.get(selected_role, "")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-submit-session":
+            self._submit()
+        else:
+            self.dismiss(None)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._submit()
+
+    def _submit(self) -> None:
+        role_select = self.query_one("#select-session-role", Select)
+        session_inp = self.query_one("#input-session-id", Input)
+        role = str(role_select.value)
+        session_id = session_inp.value.strip()
+
+        if not session_id:
+            self.notify("Please enter a valid session ID or conversation UUID.", severity="warning")
+            return
+
+        self.dismiss({
+            "role": role,
+            "session_id": session_id,
+        })
+

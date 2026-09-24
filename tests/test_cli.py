@@ -52,3 +52,36 @@ def test_cli_parser_task_args():
     assert args.command == "run"
     assert args.task == "Run linter"
 
+
+def test_cli_parser_session_args():
+    from orchestrator.cli import build_parser, _parse_sessions_arg
+
+    parser = build_parser()
+
+    # tui with session flags
+    args = parser.parse_args([
+        "tui",
+        "--codex-session", "01a0d25d-3112-7162-8a21-4c7377c497b3",
+        "--agy-session", "19a3b398-ec3a-422a-969a-fbb5c0eabb22",
+        "-s", "reviewer=codex-rev-1234",
+    ])
+    assert args.command == "tui"
+    assert args.codex_session == "01a0d25d-3112-7162-8a21-4c7377c497b3"
+    assert args.agy_session == "19a3b398-ec3a-422a-969a-fbb5c0eabb22"
+    assert args.session == ["reviewer=codex-rev-1234"]
+
+    sessions = _parse_sessions_arg(args)
+    assert sessions["decision_maker"] == "01a0d25d-3112-7162-8a21-4c7377c497b3"
+    assert sessions["developer"] == "19a3b398-ec3a-422a-969a-fbb5c0eabb22"
+    assert sessions["reviewer"] == "codex-rev-1234"
+
+    # run with --session flags
+    run_args = parser.parse_args([
+        "run",
+        "--session", "decision_maker=custom-dm-id",
+        "--session", "developer=custom-dev-id",
+    ])
+    run_sessions = _parse_sessions_arg(run_args)
+    assert run_sessions["decision_maker"] == "custom-dm-id"
+    assert run_sessions["developer"] == "custom-dev-id"
+

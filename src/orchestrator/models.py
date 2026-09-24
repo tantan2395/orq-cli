@@ -32,6 +32,7 @@ class RoleConfig(BaseModel):
     profile: str = Field(description="Referenced ModelProfile id")
     prompt_file: Optional[str] = Field(default=None, description="Path to role behavioral contract markdown")
     description: Optional[str] = Field(default="", description="Role summary")
+    seed_session_id: Optional[str] = Field(default=None, description="Optional native session ID to seed/resume")
 
 
 class StageType(str, Enum):

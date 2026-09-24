@@ -251,4 +251,46 @@ async def test_tui_question_asked_event_triggers_modal():
         assert not isinstance(app.screen, QuestionModal)
 
 
+@pytest.mark.asyncio
+async def test_tui_initial_sessions_seeding():
+    """Verify that initial_sessions passed to OrchestratorTUI are seeded in the session manager."""
+    app = OrchestratorTUI(
+        initial_sessions={
+            "decision_maker": "01a0d25d-3112-7162-8a21-4c7377c497b3",
+            "developer": "19a3b398-ec3a-422a-969a-fbb5c0eabb22",
+        }
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        dm_sid = app.engine.session_manager.get_session_id("decision_maker")
+        dev_sid = app.engine.session_manager.get_session_id("developer")
+        assert dm_sid == "01a0d25d-3112-7162-8a21-4c7377c497b3"
+        assert dev_sid == "19a3b398-ec3a-422a-969a-fbb5c0eabb22"
+
+
+@pytest.mark.asyncio
+async def test_tui_attach_session_modal():
+    """Verify that AttachSessionModal updates the active session for a role in the TUI."""
+    from orchestrator.tui.modals import AttachSessionModal
+    from textual.widgets import Input
+
+    app = OrchestratorTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.action_attach_session()
+        await pilot.pause()
+
+        assert isinstance(app.screen, AttachSessionModal)
+
+        inp = app.screen.query_one("#input-session-id", Input)
+        inp.value = "new-codex-session-id-999"
+
+        await pilot.click("#btn-submit-session")
+        await pilot.pause()
+
+        assert not isinstance(app.screen, AttachSessionModal)
+        dm_sid = app.engine.session_manager.get_session_id("decision_maker")
+        assert dm_sid == "new-codex-session-id-999"
+
+
 

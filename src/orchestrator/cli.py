@@ -5,6 +5,7 @@ import asyncio
 import json
 from pathlib import Path
 import sys
+from typing import Dict, Optional
 from rich.console import Console
 from rich.table import Table
 
@@ -16,6 +17,20 @@ from orchestrator.runner import WorkflowRunner
 from orchestrator.tui.app import OrchestratorTUI
 
 console = Console()
+
+
+def _parse_sessions_arg(args: argparse.Namespace) -> Dict[str, str]:
+    """Parses session seeding arguments into a mapping of role -> native_session_id."""
+    sessions: Dict[str, str] = {}
+    if getattr(args, "codex_session", None):
+        sessions["decision_maker"] = args.codex_session
+    if getattr(args, "agy_session", None):
+        sessions["developer"] = args.agy_session
+    for item in getattr(args, "session", []) or []:
+        if "=" in item:
+            role, sid = item.split("=", 1)
+            sessions[role.strip()] = sid.strip()
+    return sessions
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -57,11 +72,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     )
     initial_task = getattr(args, "task", None) or getattr(args, "task_pos", None)
     project_id = getattr(args, "project", None)
+    initial_sessions = _parse_sessions_arg(args)
     final_run = asyncio.run(runner.run(
         workflow_id=args.workflow,
         max_turns=args.max_turns,
         initial_task=initial_task,
         project_id=project_id,
+        initial_sessions=initial_sessions,
     ))
     return 0 if final_run.status == "completed" else 1
 
@@ -71,12 +88,14 @@ def cmd_tui(args: argparse.Namespace) -> int:
     cfg = load_config(Path(args.config) if args.config else None)
     initial_task = getattr(args, "task", None) or getattr(args, "task_pos", None)
     project_id = getattr(args, "project", None)
+    initial_sessions = _parse_sessions_arg(args)
     app = OrchestratorTUI(
         config=cfg,
         workspace_root=args.workspace,
         workflow_id=args.workflow,
         initial_task=initial_task,
         project_id=project_id,
+        initial_sessions=initial_sessions,
     )
     app.run()
     return 0
@@ -305,6 +324,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--workflow", default=None, help="Workflow ID to run")
     p_run.add_argument("--workspace", default=".", help="Target workspace root")
     p_run.add_argument("--project", default=None, help="Project name or ID to associate run with")
+    p_run.add_argument("--session", "-s", action="append", default=[], help="Seed native session ID for role (format: role=id)")
+    p_run.add_argument("--codex-session", default=None, help="Shorthand to seed Codex session for decision_maker")
+    p_run.add_argument("--agy-session", default=None, help="Shorthand to seed Agy conversation for developer")
     p_run.add_argument("--max-turns", type=int, default=10, help="Maximum turns to execute")
     p_run.add_argument("--config", default=None, help="Path to orchestrator.yaml")
 
@@ -315,6 +337,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_tui.add_argument("--workflow", default=None, help="Workflow ID to run")
     p_tui.add_argument("--workspace", default=".", help="Target workspace root")
     p_tui.add_argument("--project", default=None, help="Project name or ID to associate run with")
+    p_tui.add_argument("--session", "-s", action="append", default=[], help="Seed native session ID for role (format: role=id)")
+    p_tui.add_argument("--codex-session", default=None, help="Shorthand to seed Codex session for decision_maker")
+    p_tui.add_argument("--agy-session", default=None, help="Shorthand to seed Agy conversation for developer")
     p_tui.add_argument("--config", default=None, help="Path to orchestrator.yaml")
 
     # project

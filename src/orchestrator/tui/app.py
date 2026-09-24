@@ -38,7 +38,13 @@ from orchestrator.events import EventBus, OrchestrationEvent
 from orchestrator.mcp.ipc import IPCServer
 from orchestrator.models import OrchestrationTask, Project, StageConfig, WorkflowRun, utc_now_iso
 from orchestrator.tui.kanban import KanbanBoard, TaskCard
-from orchestrator.tui.modals import NewTaskModal, ProjectPickerModal, QuestionModal, TaskDetailModal
+from orchestrator.tui.modals import (
+    AttachSessionModal,
+    NewTaskModal,
+    ProjectPickerModal,
+    QuestionModal,
+    TaskDetailModal,
+)
 
 
 class OrchestratorTUI(App):
@@ -202,6 +208,7 @@ class OrchestratorTUI(App):
         Binding("n", "new_task", "New Task"),
         Binding("a", "answer_question", "Answer"),
         Binding("g", "grill_me", "Grill Me"),
+        Binding("s", "attach_session", "Sessions"),
         Binding("p", "open_project_picker", "Switch Project"),
         Binding("1", "switch_tab_1", "Kanban"),
         Binding("2", "switch_tab_2", "Workflow"),
@@ -218,6 +225,7 @@ class OrchestratorTUI(App):
         workflow_id: Optional[str] = None,
         initial_task: Optional[str] = None,
         project_id: Optional[str] = None,
+        initial_sessions: Optional[Dict[str, str]] = None,
     ):
         super().__init__()
         self.config = config or get_default_config()
@@ -225,6 +233,7 @@ class OrchestratorTUI(App):
         self.workflow_id = workflow_id or self.config.active_workflow
         self.initial_task = initial_task
         self.project_id = project_id
+        self.initial_sessions = initial_sessions or {}
 
         self.db = Database(self.config.sqlite_db_path)
         self.events = EventBus()
@@ -259,6 +268,7 @@ class OrchestratorTUI(App):
             yield Button("New Task [n]", id="btn-new-task", variant="primary")
             yield Button("Answer [a]", id="btn-answer", variant="warning")
             yield Button("Grill Me [g]", id="btn-grill-me")
+            yield Button("Sessions [s]", id="btn-sessions")
             yield Button("Projects [p]", id="btn-projects")
             yield Button("Cancel Run", id="btn-cancel", variant="error")
 
@@ -312,6 +322,19 @@ class OrchestratorTUI(App):
             workspace_root=self.workspace_root,
             project_id=self.current_project.id if self.current_project else None,
         )
+
+        # Seed initial native sessions if provided via CLI or config
+        if self.initial_sessions:
+            for role, native_id in self.initial_sessions.items():
+                role_cfg = self.config.roles.get(role)
+                if role_cfg:
+                    await self.engine.session_manager.get_or_create_session(
+                        workflow_run_id=self.workflow_run.run_id,
+                        role=role,
+                        agent_name=role_cfg.agent,
+                        workspace_root=self.workspace_root,
+                        initial_native_id=native_id,
+                    )
 
         chat_log = self.query_one("#chat-log", RichLog)
         activity_log = self.query_one("#activity-log", RichLog)
@@ -733,6 +756,8 @@ class OrchestratorTUI(App):
             self.action_answer_question()
         elif event.button.id == "btn-grill-me":
             self.run_worker(self.action_grill_me())
+        elif event.button.id == "btn-sessions":
+            self.action_attach_session()
         elif event.button.id == "btn-projects":
             self.action_open_project_picker()
         elif event.button.id == "btn-cancel":
@@ -978,6 +1003,43 @@ class OrchestratorTUI(App):
             self.workflow_run = refreshed
         self._update_header()
         self._ensure_runner_loop()
+
+    def action_attach_session(self) -> None:
+        """Pops up the modal to attach or switch a native CLI session for any role."""
+        roles = list(self.config.roles.keys())
+        active = {r: self.engine.session_manager.get_session_id(r) or "" for r in roles}
+
+        def _on_modal_close(result: Optional[Dict[str, str]]) -> None:
+            if result:
+                self.run_worker(self._handle_attach_session_result(result["role"], result["session_id"]))
+
+        self.push_screen(
+            AttachSessionModal(roles=roles, active_sessions=active, selected_role=self._get_current_role()),
+            callback=_on_modal_close,
+        )
+
+    async def _handle_attach_session_result(self, role: str, session_id: str) -> None:
+        if not self.workflow_run:
+            return
+        role_cfg = self.config.roles.get(role)
+        agent_name = role_cfg.agent if role_cfg else "codex"
+        await self.engine.session_manager.update_native_id(
+            workflow_run_id=self.workflow_run.run_id,
+            role=role,
+            native_session_id=session_id,
+            agent_name=agent_name,
+            workspace_root=self.workspace_root,
+        )
+        self._render_agents()
+
+        activity_log = self.query_one("#activity-log", RichLog)
+        activity_log.write(f"[bold green]✓ Attached native session [white]{escape(session_id)}[/white] to role [yellow]{escape(role)}[/yellow].[/bold green]")
+
+        chat_log = self.query_one("#chat-log", RichLog)
+        me_prefix = Text.from_markup(f"[bold cyan]Me → {escape(role)} [Session Attached]:[/bold cyan] ")
+        me_prefix.append(f"Resuming from native session: {session_id}")
+        chat_log.write(me_prefix)
+        chat_log.scroll_end(animate=False)
 
     def action_switch_tab_1(self) -> None:
         self.query_one("#tabs", TabbedContent).active = "tab-kanban"

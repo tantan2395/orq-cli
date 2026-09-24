@@ -1,7 +1,7 @@
 """Headless workflow runner executing autonomous agent team loops."""
 
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 import uuid
 from rich.console import Console
 
@@ -48,6 +48,7 @@ class WorkflowRunner:
         max_turns: int = 10,
         initial_task: Optional[str] = None,
         project_id: Optional[str] = None,
+        initial_sessions: Optional[Dict[str, str]] = None,
     ) -> WorkflowRun:
         """Executes the autonomous loop across stages until completed, paused, or max_turns reached."""
         await self.engine.initialize()
@@ -59,6 +60,19 @@ class WorkflowRunner:
             project_id=project_id,
         )
         console.print(f"[bold green]✓ Started Workflow Run:[/bold green] [cyan]{run.run_id}[/cyan] (Stage: [bold]{run.current_stage}[/bold])")
+
+        if initial_sessions:
+            for role, native_id in initial_sessions.items():
+                role_cfg = self.config.roles.get(role)
+                if role_cfg:
+                    await self.engine.session_manager.get_or_create_session(
+                        workflow_run_id=run.run_id,
+                        role=role,
+                        agent_name=role_cfg.agent,
+                        workspace_root=self.workspace_root,
+                        initial_native_id=native_id,
+                    )
+                    console.print(f"[bold cyan]Attached native session [white]{native_id}[/white] to role [yellow]{role}[/yellow].[/bold cyan]")
 
         if initial_task and initial_task.strip():
             definition = self.config.workflows.get(run.definition_id)
