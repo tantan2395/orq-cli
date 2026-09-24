@@ -1,0 +1,112 @@
+workspace:
+  workspace_root: .
+  use_git_worktree: true
+  filesystem_mode: workspace_only
+  allow_network: true
+  allow_shell: true
+  allow_git: true
+  allow_destructive_operations: false
+  require_human_approval_for:
+  - git_push
+  - force_push
+  - destructive_git
+  - deployment
+model_profiles:
+  strategic:
+    id: strategic
+    model: gpt-6-astra
+    reasoning: high
+    description: Deep architectural strategy, decomposition, and gate evaluation
+  implementation:
+    id: implementation
+    model: gemini-3.8-flash-high
+    reasoning: medium
+    description: Fast, reliable, high-context code implementation and refactoring
+  adversarial:
+    id: adversarial
+    model: gpt-6-astra
+    reasoning: high
+    description: Rigorous, adversarial code review and independent verification
+  lightweight:
+    id: lightweight
+    model: gemini-3.8-flash-low
+    reasoning: low
+    description: Rapid test execution, smoke checks, and build runs
+roles:
+  decision_maker:
+    name: decision_maker
+    agent: codex
+    profile: strategic
+    prompt_file: prompts/decision_maker.md
+    description: Lead Architect and Decision Maker
+  developer:
+    name: developer
+    agent: agy
+    profile: implementation
+    prompt_file: prompts/developer.md
+    description: Core Feature Developer
+  code_reviewer:
+    name: code_reviewer
+    agent: codex
+    profile: adversarial
+    prompt_file: prompts/code_reviewer.md
+    description: Adversarial Code Reviewer
+  tester:
+    name: tester
+    agent: agy
+    profile: lightweight
+    prompt_file: prompts/tester.md
+    description: Verification & Test Engineer
+workflows:
+  default_review_dev_loop:
+    id: default_review_dev_loop
+    version: 1
+    description: Standard decision-maker -> developer -> reviewer -> final-review
+      loop
+    initial_stage: strategy
+    stages:
+      strategy:
+        name: strategy
+        role: decision_maker
+        type: sequential
+        description: High-level architecture, requirements analysis, and bounded slice
+          planning
+        next_on_handoff: implementation
+        next_on_review_request: null
+        next_on_approved: null
+        next_on_changes_requested: null
+        max_loop_iterations: 3
+      implementation:
+        name: implementation
+        role: developer
+        type: sequential
+        description: Code implementation, test fixture creation, and local validation
+        next_on_handoff: null
+        next_on_review_request: review
+        next_on_approved: null
+        next_on_changes_requested: null
+        max_loop_iterations: 3
+      review:
+        name: review
+        role: code_reviewer
+        type: conditional
+        description: Independent code review, probe verification, and gate check
+        next_on_handoff: null
+        next_on_review_request: null
+        next_on_approved: final_review
+        next_on_changes_requested: implementation
+        max_loop_iterations: 3
+      final_review:
+        name: final_review
+        role: decision_maker
+        type: sequential
+        description: Lead acceptance sign-off, checkpoint commit verification, and
+          next milestone planning
+        next_on_handoff: null
+        next_on_review_request: null
+        next_on_approved: done
+        next_on_changes_requested: null
+        max_loop_iterations: 3
+active_workflow: default_review_dev_loop
+ipc_socket_path: /tmp/agent_orchestrator.sock
+sqlite_db_path: .orchestrator/state.db

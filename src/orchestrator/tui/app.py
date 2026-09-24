@@ -2,7 +2,7 @@
 
 import asyncio
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 import uuid
 from rich.markdown import Markdown
 from rich.markup import escape
@@ -24,14 +24,21 @@ from textual.widgets import (
     TabPane,
 )
 
-from orchestrator.commands import HumanInterventionCommand, WorkflowControlCommand
+from orchestrator.commands import (
+    HumanInterventionCommand,
+    TaskCreateCommand,
+    TaskLifecycleCommand,
+    WorkflowControlCommand,
+)
 from orchestrator.config import OrchestratorConfig, get_default_config
 from orchestrator.db import Database
 from orchestrator.dispatcher import Dispatcher
 from orchestrator.engine import OrchestrationEngine
 from orchestrator.events import EventBus, OrchestrationEvent
 from orchestrator.mcp.ipc import IPCServer
-from orchestrator.models import OrchestrationTask, StageConfig, WorkflowRun, utc_now_iso
+from orchestrator.models import OrchestrationTask, Project, StageConfig, WorkflowRun, utc_now_iso
+from orchestrator.tui.kanban import KanbanBoard, TaskCard
+from orchestrator.tui.modals import NewTaskModal, ProjectPickerModal, TaskDetailModal
 
 
 class OrchestratorTUI(App):
@@ -52,6 +59,10 @@ class OrchestratorTUI(App):
         align-vertical: middle;
     }
 
+    #status-project-info {
+        margin-right: 2;
+    }
+
     #status-run-info {
         width: 1fr;
     }
@@ -70,19 +81,69 @@ class OrchestratorTUI(App):
         border: solid #0284c7;
     }
 
-    #main-split {
+    #control-row {
+        height: 3;
+        padding: 0 1;
+        margin-top: 1;
+        margin-bottom: 1;
+        align-vertical: middle;
+    }
+
+    #control-row Button {
+        margin-right: 1;
+    }
+
+    #tabs {
+        height: 1fr;
+    }
+
+    #kanban-board {
+        height: 1fr;
+    }
+
+    #dag-container {
+        padding: 1;
+        height: 1fr;
+    }
+
+    .stage-card {
+        padding: 1;
+        margin-bottom: 1;
+        border: solid #334155;
+        background: #1e293b;
+    }
+
+    .stage-active {
+        border: solid #38bdf8;
+        background: #0369a1;
+    }
+
+    .stage-done {
+        border: solid #22c55e;
+        background: #14532d;
+    }
+
+    #agents-container {
+        padding: 1;
+        height: 1fr;
+    }
+
+    .agent-card {
+        padding: 1;
+        margin-bottom: 1;
+        border: solid #334155;
+        background: #1e293b;
+    }
+
+    #activity-split {
         height: 1fr;
         layout: horizontal;
     }
 
-    #left-pane {
+    #activity-log-pane {
         width: 55%;
+        height: 1fr;
         border-right: solid #334155;
-        padding: 0 1;
-    }
-
-    #right-pane {
-        width: 45%;
         padding: 0 1;
     }
 
@@ -93,12 +154,10 @@ class OrchestratorTUI(App):
         padding: 0 1;
     }
 
-    #tabs {
+    #chat-pane {
+        width: 45%;
         height: 1fr;
-    }
-
-    #chat-container {
-        height: 1fr;
+        padding: 0 1;
     }
 
     #chat-role-row {
@@ -133,40 +192,6 @@ class OrchestratorTUI(App):
         width: 1fr;
     }
 
-    #dag-container {
-        padding: 1;
-        height: 1fr;
-    }
-
-    .stage-card {
-        padding: 1;
-        margin-bottom: 1;
-        border: solid #334155;
-        background: #1e293b;
-    }
-
-    .stage-active {
-        border: solid #38bdf8;
-        background: #0369a1;
-    }
-
-    .stage-done {
-        border: solid #22c55e;
-        background: #14532d;
-    }
-
-    #tasks-log, #artifacts-log {
-        height: 1fr;
-        background: #090d16;
-        border: solid #1e293b;
-        padding: 0 1;
-    }
-
-    #control-row {
-        height: 3;
-        margin-bottom: 1;
-    }
-
     Button {
         margin-right: 1;
     }
@@ -174,8 +199,14 @@ class OrchestratorTUI(App):
 
     BINDINGS = [
         Binding("space", "toggle_pause", "Pause / Resume"),
-        Binding("ctrl+q", "quit", "Quit"),
+        Binding("n", "new_task", "New Task"),
+        Binding("p", "open_project_picker", "Switch Project"),
+        Binding("1", "switch_tab_1", "Kanban"),
+        Binding("2", "switch_tab_2", "Workflow"),
+        Binding("3", "switch_tab_3", "Agents"),
+        Binding("4", "switch_tab_4", "Activity"),
         Binding("tab", "next_tab", "Switch Tab"),
+        Binding("ctrl+q", "quit", "Quit"),
     ]
 
     def __init__(
@@ -184,12 +215,14 @@ class OrchestratorTUI(App):
         workspace_root: Optional[str] = None,
         workflow_id: Optional[str] = None,
         initial_task: Optional[str] = None,
+        project_id: Optional[str] = None,
     ):
         super().__init__()
         self.config = config or get_default_config()
         self.workspace_root = workspace_root or self.config.workspace.workspace_root
         self.workflow_id = workflow_id or self.config.active_workflow
         self.initial_task = initial_task
+        self.project_id = project_id
 
         self.db = Database(self.config.sqlite_db_path)
         self.events = EventBus()
@@ -204,6 +237,7 @@ class OrchestratorTUI(App):
             event_bus=self.events,
         )
 
+        self.current_project: Optional[Project] = None
         self.workflow_run: Optional[WorkflowRun] = None
         self._loop_task: Optional[asyncio.Task] = None
 
@@ -211,46 +245,46 @@ class OrchestratorTUI(App):
         yield Header(show_clock=True)
 
         with Horizontal(id="status-bar"):
+            yield Label("Project: Default", id="status-project-info")
             yield Label("Initializing...", id="status-run-info")
             yield Label("Role: None", id="status-role-badge")
             yield Label("State: Idle", id="status-state-badge")
 
-        with Horizontal(id="main-split"):
-            # Left pane: Live Activity Log
-            with Vertical(id="left-pane"):
-                yield Label("[bold cyan]Agent Activity & Live Stream[/bold cyan]")
-                yield RichLog(id="activity-log", wrap=True, highlight=True, markup=True)
+        with Horizontal(id="control-row"):
+            yield Button("Pause", id="btn-pause", variant="warning")
+            yield Button("Resume", id="btn-resume", variant="success")
+            yield Button("New Task [n]", id="btn-new-task", variant="primary")
+            yield Button("Projects [p]", id="btn-projects")
+            yield Button("Cancel Run", id="btn-cancel", variant="error")
 
-            # Right pane: Tabs (Chat, DAG, Tasks, Artifacts)
-            with Vertical(id="right-pane"):
-                with Horizontal(id="control-row"):
-                    yield Button("Pause", id="btn-pause", variant="warning")
-                    yield Button("Resume", id="btn-resume", variant="success")
-                    yield Button("Cancel Run", id="btn-cancel", variant="error")
+        with TabbedContent(id="tabs"):
+            with TabPane("[1] Kanban", id="tab-kanban"):
+                yield KanbanBoard(id="kanban-board")
 
-                with TabbedContent(id="tabs"):
-                    with TabPane("Direct Chat", id="tab-chat"):
-                        with Vertical(id="chat-container"):
-                            with Horizontal(id="chat-role-row"):
-                                yield Label("Role:", id="chat-role-label")
-                                yield Select(
-                                    [(role, role) for role in self.config.roles.keys()],
-                                    value="decision_maker",
-                                    id="chat-role-select",
-                                )
-                            yield RichLog(id="chat-log", wrap=True, highlight=True, markup=True, classes="chat-box")
-                            with Horizontal(id="chat-input-row"):
-                                yield Input(placeholder="Send direct instruction to role...", id="chat-input")
-                                yield Button("Send", id="btn-chat-send", variant="primary")
+            with TabPane("[2] Workflow", id="tab-workflow"):
+                yield VerticalScroll(id="dag-container")
 
-                    with TabPane("Workflow DAG", id="tab-dag"):
-                        yield VerticalScroll(id="dag-container")
+            with TabPane("[3] Agents", id="tab-agents"):
+                yield VerticalScroll(id="agents-container")
 
-                    with TabPane("Tasks & Handoffs", id="tab-tasks"):
-                        yield RichLog(id="tasks-log", wrap=True, highlight=True, markup=True)
+            with TabPane("[4] Activity", id="tab-activity"):
+                with Horizontal(id="activity-split"):
+                    with Vertical(id="activity-log-pane"):
+                        yield Label("[bold cyan]Agent Activity & Live Stream[/bold cyan]")
+                        yield RichLog(id="activity-log", wrap=True, highlight=True, markup=True)
 
-                    with TabPane("Artifacts", id="tab-artifacts"):
-                        yield RichLog(id="artifacts-log", wrap=True, highlight=True, markup=True)
+                    with Vertical(id="chat-pane"):
+                        with Horizontal(id="chat-role-row"):
+                            yield Label("Role:", id="chat-role-label")
+                            yield Select(
+                                [(role, role) for role in self.config.roles.keys()],
+                                value="decision_maker",
+                                id="chat-role-select",
+                            )
+                        yield RichLog(id="chat-log", wrap=True, highlight=True, markup=True, classes="chat-box")
+                        with Horizontal(id="chat-input-row"):
+                            yield Input(placeholder="Send direct instruction to role...", id="chat-input")
+                            yield Button("Send", id="btn-chat-send", variant="primary")
 
         yield Footer()
 
@@ -261,10 +295,17 @@ class OrchestratorTUI(App):
 
         self.events.add_callback(self._on_event)
 
+        # Resolve Project
+        if self.project_id:
+            self.current_project = await self.db.get_project(self.project_id)
+        else:
+            self.current_project = await self.engine.resolve_active_project(self.workspace_root)
+
         # Create or load active workflow run
         self.workflow_run = await self.engine.create_workflow_run(
             workflow_id=self.workflow_id,
             workspace_root=self.workspace_root,
+            project_id=self.current_project.id if self.current_project else None,
         )
 
         chat_log = self.query_one("#chat-log", RichLog)
@@ -280,10 +321,13 @@ class OrchestratorTUI(App):
                 task_id=f"human_init_{uuid.uuid4().hex[:8]}",
                 workflow_run_id=self.workflow_run.run_id,
                 stage_id=self.workflow_run.current_stage,
+                title=self.initial_task.strip()[:60],
+                description=self.initial_task.strip(),
                 type="human_intervention",
                 requested_by="human",
                 target_role=initial_role,
                 status="queued",
+                kanban_column="ready",
                 payload={"task": self.initial_task.strip()},
             )
             await self.db.save_task(task)
@@ -293,10 +337,12 @@ class OrchestratorTUI(App):
         else:
             chat_log.write("[bold cyan]System:[/bold cyan] Welcome to [bold]Orchestrator TUI[/bold].")
             chat_log.write("[dim]Workflow initialized. Type your task or question below in Direct Chat, or switch roles to converse directly.[/dim]\n")
-            activity_log.write("[bold cyan]System:[/bold cyan] Ready & awaiting human task. Send a task via Direct Chat or launch with: [bold white]orq tui \"<task>\"[/bold white].")
+            activity_log.write("[bold cyan]System:[/bold cyan] Ready & awaiting human task. Send a task via Direct Chat, press [bold white]'n'[/bold white] for New Task, or launch with: [bold white]orq tui \"<task>\"[/bold white].")
             self._update_header(state_override="AWAITING TASK")
 
         self._render_dag()
+        self._render_agents()
+        await self._refresh_kanban()
 
         # Start autonomous runner in background
         self._loop_task = asyncio.create_task(self._run_orchestrator_loop())
@@ -318,7 +364,7 @@ class OrchestratorTUI(App):
                 args = activity.get("args") or {}
                 if isinstance(args, dict):
                     preview_items = []
-                    for k in ["target_role", "task", "reason", "decision", "summary", "workflow_run_id"]:
+                    for k in ["title", "target_role", "task", "reason", "decision", "summary", "workflow_run_id"]:
                         if k in args:
                             val = str(args[k]).replace("\n", " ").strip()
                             if len(val) > 40:
@@ -353,10 +399,12 @@ class OrchestratorTUI(App):
             log.write(f"\n[bold green]▶ Stage Started:[/bold green] [bold]{escape(str(event.payload.get('new_stage', '')))}[/bold]")
             self._update_header()
             self._render_dag()
+            self._render_agents()
         elif event.type == "workflow_completed":
             log.write("\n[bold green]✓ Workflow Completed Successfully![/bold green]")
             self._update_header()
             self._render_dag()
+            self._render_agents()
         elif event.type == "workflow_paused":
             reason = event.payload.get("reason") or "Workflow paused by agent or operator"
             log.write(f"\n[bold yellow]⏸ Workflow Paused:[/bold yellow] {escape(reason)}")
@@ -373,13 +421,7 @@ class OrchestratorTUI(App):
             if refreshed:
                 self.workflow_run = refreshed
             self._update_header()
-
-        # Refresh tasks & artifacts tabs
-        if event.type in ["task_queued", "handoff_created", "review_requested", "review_completed"]:
-            await self._refresh_tasks()
-        if event.type == "artifact_registered":
-            await self._refresh_artifacts()
-        if event.type in ["agent_message_sent", "message_sent"]:
+        elif event.type in ["agent_message_sent", "message_sent"]:
             payload = event.payload
             sender = event.role or "Agent"
             recipient = payload.get("recipient") or payload.get("target") or "human"
@@ -391,18 +433,42 @@ class OrchestratorTUI(App):
                 chat_log.write(f"[bold green]{escape(str(sender))} → {escape(str(recipient))}:[/bold green] {escape(str(message_text))}")
             chat_log.scroll_end(animate=False)
 
+        # Refresh Kanban board whenever a task or review event occurs
+        if event.type in [
+            "task_created",
+            "task_started",
+            "task_completed",
+            "task_ready",
+            "task_blocked",
+            "task_cancelled",
+            "task_updated",
+            "task_queued",
+            "handoff_created",
+            "review_requested",
+            "review_completed",
+        ]:
+            await self._refresh_kanban()
+
+    def _get_current_role(self) -> str:
+        if not self.workflow_run:
+            return "None"
+        definition = self.config.workflows.get(self.workflow_run.definition_id)
+        if definition and self.workflow_run.current_stage in definition.stages:
+            return definition.stages[self.workflow_run.current_stage].role
+        return "None"
+
     def _update_header(self, state_override: Optional[str] = None) -> None:
         if not self.workflow_run:
             return
+        proj_info = self.query_one("#status-project-info", Label)
         run_info = self.query_one("#status-run-info", Label)
         role_badge = self.query_one("#status-role-badge", Label)
         state_badge = self.query_one("#status-state-badge", Label)
 
-        definition = self.config.workflows.get(self.workflow_run.definition_id)
-        current_role = "None"
-        if definition and self.workflow_run.current_stage in definition.stages:
-            current_role = definition.stages[self.workflow_run.current_stage].role
+        proj_name = self.current_project.name if self.current_project else "Default"
+        proj_info.update(f"Project: [bold magenta]{escape(proj_name)}[/bold magenta]")
 
+        current_role = self._get_current_role()
         run_info.update(f"Run: [cyan]{escape(self.workflow_run.run_id)}[/cyan] | Stage: [bold]{escape(self.workflow_run.current_stage)}[/bold]")
         role_badge.update(f"Role: [bold yellow]{escape(current_role)}[/bold yellow]")
 
@@ -446,28 +512,80 @@ class OrchestratorTUI(App):
             )
             dag.mount(card)
 
-    async def _refresh_tasks(self) -> None:
-        tasks_log = self.query_one("#tasks-log", RichLog)
-        tasks_log.clear()
+    def _render_agents(self) -> None:
+        container = self.query_one("#agents-container", VerticalScroll)
+        container.remove_children()
+
+        current_role = self._get_current_role()
+        for role_name, role_cfg in self.config.roles.items():
+            agent_name = role_cfg.agent
+            profile_name = getattr(role_cfg, "profile", getattr(role_cfg, "model_profile", ""))
+            profile = self.config.model_profiles.get(profile_name)
+            model_info = profile.model if profile else "default"
+            reasoning = profile.reasoning.value if profile and hasattr(profile.reasoning, "value") else str(getattr(profile, "reasoning", "none"))
+
+            active_session = self.engine.session_manager.get_session_id(role_name) or "none"
+            is_active = (self.workflow_run and self.workflow_run.status == "running" and role_name == current_role)
+
+            status_badge = "[bold green]● ACTIVE[/bold green]" if is_active else "[dim]IDLE[/dim]"
+
+            card = Static(
+                f"[bold cyan]Role: {escape(role_name)}[/bold cyan] ({status_badge})\n"
+                f"  • [bold]Agent Provider:[/bold] [yellow]{escape(agent_name)}[/yellow]\n"
+                f"  • [bold]Model Profile:[/bold]  [white]{escape(profile_name)}[/white] ([dim]{escape(model_info)}, reasoning: {escape(reasoning)}[/dim])\n"
+                f"  • [bold]Active Session:[/bold] [dim]{escape(active_session)}[/dim]",
+                classes="agent-card",
+            )
+            container.mount(card)
+
+    async def _refresh_kanban(self) -> None:
         if not self.workflow_run:
             return
         tasks = await self.db.list_tasks(self.workflow_run.run_id)
-        for t in tasks:
-            status_color = "green" if t.status == "completed" else "yellow" if t.status == "running" else "dim"
-            tasks_log.write(
-                f"[{status_color}]● {escape(t.status.upper())}[/{status_color}] [bold]{escape(t.type)}[/bold] "
-                f"({escape(t.requested_by)} → {escape(t.target_role or 'engine')})\n"
-                f"  Task: {escape(str(t.payload.get('task') or t.payload.get('summary') or ''))}\n"
-            )
+        try:
+            board = self.query_one("#kanban-board", KanbanBoard)
+            board.refresh_board(tasks)
+        except Exception:
+            pass
 
-    async def _refresh_artifacts(self) -> None:
-        artifacts_log = self.query_one("#artifacts-log", RichLog)
-        artifacts_log.clear()
+    async def on_task_card_selected(self, message: TaskCard.Selected) -> None:
+        """Opens TaskDetailModal when a card is clicked or selected."""
+        deps = await self.db.get_task_dependencies(message.task.task_id)
+        dependents = await self.db.get_task_dependents(message.task.task_id)
+
+        def on_detail_action(res: Optional[Dict[str, Any]]) -> None:
+            if not res:
+                return
+            act = res.get("action")
+            if act == "chat":
+                tabs = self.query_one("#tabs", TabbedContent)
+                tabs.active = "tab-activity"
+                role_select = self.query_one("#chat-role-select", Select)
+                target_role = res.get("role")
+                if target_role and target_role in self.config.roles:
+                    role_select.value = target_role
+                self.query_one("#chat-input", Input).focus()
+            elif act in ["start", "block", "cancel"]:
+                self.run_worker(self._execute_task_lifecycle(res["task_id"], act))
+
+        self.push_screen(TaskDetailModal(task=message.task, dependencies=deps, dependents=dependents), on_detail_action)
+
+    async def _execute_task_lifecycle(self, task_id: str, action: str) -> None:
         if not self.workflow_run:
             return
-        arts = await self.db.list_artifacts(self.workflow_run.run_id)
-        for a in arts:
-            artifacts_log.write(f"[bold cyan]{escape(a.type.value.upper())}[/bold cyan]: {escape(a.path)} [dim]({escape(a.description or '')})[/dim]")
+        cmd = TaskLifecycleCommand(
+            workflow_run_id=self.workflow_run.run_id,
+            task_id=task_id,
+            action=action,
+            reason="Triggered by operator via Task Details",
+        )
+        res = await self.engine.handle_task_lifecycle(cmd)
+        await self._refresh_kanban()
+        log = self.query_one("#activity-log", RichLog)
+        if res.get("accepted"):
+            log.write(f"[bold green]✓ Task {task_id}:[/bold green] Action '{action}' accepted.")
+        else:
+            log.write(f"[bold red]✗ Task {task_id}:[/bold red] Action '{action}' rejected: {escape(str(res.get('reason')))}")
 
     def _ensure_runner_loop(self) -> None:
         """Ensures the background orchestrator execution loop is running."""
@@ -515,12 +633,15 @@ class OrchestratorTUI(App):
                 continue
 
             self._update_header()
+            self._render_agents()
 
             if pending_task.task_id and not pending_task.task_id.startswith("turn_task_"):
                 pending_task.status = "running"
+                if pending_task.kanban_column in ["ready", "backlog"]:
+                    pending_task.kanban_column = "in_progress"
                 pending_task.started_at = utc_now_iso()
                 await self.db.save_task(pending_task)
-                await self._refresh_tasks()
+                await self._refresh_kanban()
 
             turn_ctx = self.engine.context_manager.create_turn_context(
                 workflow_run=self.workflow_run,
@@ -540,9 +661,10 @@ class OrchestratorTUI(App):
             # Mark task completed in DB if it was a stored task
             if pending_task and pending_task.task_id and not pending_task.task_id.startswith("turn_task_"):
                 pending_task.status = "completed"
+                pending_task.kanban_column = "done"
                 pending_task.completed_at = utc_now_iso()
                 await self.db.save_task(pending_task)
-                await self._refresh_tasks()
+                await self._refresh_kanban()
 
             # Refresh status
             refreshed = await self.db.get_workflow_run(self.workflow_run.run_id)
@@ -550,6 +672,7 @@ class OrchestratorTUI(App):
                 self.workflow_run = refreshed
                 self._update_header()
                 self._render_dag()
+                self._render_agents()
 
             if self.workflow_run.status in ["completed", "failed", "cancelled"]:
                 break
@@ -570,6 +693,10 @@ class OrchestratorTUI(App):
             self.workflow_run = await self.db.get_workflow_run(self.workflow_run.run_id)
             self._update_header()
             self._ensure_runner_loop()
+        elif event.button.id == "btn-new-task":
+            self.action_new_task()
+        elif event.button.id == "btn-projects":
+            self.action_open_project_picker()
         elif event.button.id == "btn-cancel":
             await self.engine.handle_control(WorkflowControlCommand(
                 workflow_run_id=self.workflow_run.run_id, action="cancel_stage", target_id=self.workflow_run.current_stage
@@ -628,10 +755,69 @@ class OrchestratorTUI(App):
         self._update_header()
         self._ensure_runner_loop()
 
-    async def action_next_tab(self) -> None:
+    def action_new_task(self) -> None:
+        """Opens the New Task modal dialog."""
+        def on_new_task_submit(result: Optional[Dict[str, Any]]) -> None:
+            if result:
+                self.run_worker(self._create_task_from_modal(result))
+
+        roles = list(self.config.roles.keys())
+        self.push_screen(NewTaskModal(roles=roles), on_new_task_submit)
+
+    async def _create_task_from_modal(self, data: Dict[str, Any]) -> None:
+        if not self.workflow_run:
+            return
+        cmd = TaskCreateCommand(
+            workflow_run_id=self.workflow_run.run_id,
+            title=data["title"],
+            description=data.get("description", ""),
+            target_role=data.get("target_role", "developer"),
+            kanban_column=data.get("kanban_column", "ready"),
+            requested_by="human",
+        )
+        await self.engine.handle_task_create(cmd)
+        await self._refresh_kanban()
+        log = self.query_one("#activity-log", RichLog)
+        log.write(f"[bold green]✓ Created Task:[/bold green] {escape(data['title'])} (Role: {escape(str(data.get('target_role')))}, Column: {escape(str(data.get('kanban_column')))})")
+
+    def action_open_project_picker(self) -> None:
+        """Opens the Project Picker modal dialog."""
+        async def load_and_show() -> None:
+            projects = await self.db.list_projects(include_archived=False)
+            active_id = self.current_project.id if self.current_project else None
+
+            def on_project_selected(selected_id: Optional[str]) -> None:
+                if selected_id:
+                    self.run_worker(self._switch_project(selected_id))
+
+            self.push_screen(ProjectPickerModal(projects=projects, active_project_id=active_id), on_project_selected)
+
+        self.run_worker(load_and_show())
+
+    async def _switch_project(self, project_id: str) -> None:
+        proj = await self.db.get_project(project_id)
+        if proj:
+            self.current_project = proj
+            await self.db.set_active_project(proj.id)
+            self._update_header()
+            log = self.query_one("#activity-log", RichLog)
+            log.write(f"[bold cyan]Switched active project to:[/bold cyan] {escape(proj.name)} ({escape(proj.id)})")
+
+    def action_switch_tab_1(self) -> None:
+        self.query_one("#tabs", TabbedContent).active = "tab-kanban"
+
+    def action_switch_tab_2(self) -> None:
+        self.query_one("#tabs", TabbedContent).active = "tab-workflow"
+
+    def action_switch_tab_3(self) -> None:
+        self.query_one("#tabs", TabbedContent).active = "tab-agents"
+
+    def action_switch_tab_4(self) -> None:
+        self.query_one("#tabs", TabbedContent).active = "tab-activity"
+
+    def action_next_tab(self) -> None:
         tabs = self.query_one("#tabs", TabbedContent)
-        # Cycle through tabs
-        tab_ids = ["tab-chat", "tab-dag", "tab-tasks", "tab-artifacts"]
+        tab_ids = ["tab-kanban", "tab-workflow", "tab-agents", "tab-activity"]
         current = tabs.active
         idx = (tab_ids.index(current) + 1) % len(tab_ids) if current in tab_ids else 0
         tabs.active = tab_ids[idx]

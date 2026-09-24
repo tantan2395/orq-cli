@@ -95,6 +95,7 @@ async def test_tui_message_sent_renders_in_chat():
             },
         )
         await app.events.publish(evt)
+        app.action_switch_tab_4()
         await pilot.pause()
 
         # Check that the message was rendered to chat_log
@@ -114,6 +115,8 @@ async def test_tui_defaults_to_awaiting_task():
         assert "AWAITING TASK" in str(state_badge.render())
 
         # Verify welcome instruction in chat log
+        app.action_switch_tab_4()
+        await pilot.pause()
         chat_log = app.query_one("#chat-log", RichLog)
         lines = [line.text for line in chat_log.lines]
         assert any("Welcome to Orchestrator TUI" in line for line in lines)
@@ -134,6 +137,8 @@ async def test_tui_initial_task_from_cli():
         assert init_tasks[0].target_role == "decision_maker"
 
         # Check it is logged in chat
+        app.action_switch_tab_4()
+        await pilot.pause()
         chat_log = app.query_one("#chat-log", RichLog)
         lines = [line.text for line in chat_log.lines]
         assert any("Audit security configuration" in line for line in lines)

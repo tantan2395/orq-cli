@@ -11,6 +11,11 @@ class SessionManager:
 
     def __init__(self, db: Database):
         self.db = db
+        self._role_sessions: dict[str, str] = {}
+
+    def get_session_id(self, role: str) -> Optional[str]:
+        """Returns the in-memory active session ID for a role if known."""
+        return self._role_sessions.get(role)
 
     async def get_or_create_session(
         self,
@@ -27,6 +32,7 @@ class SessionManager:
                 existing.native_session_id = initial_native_id
                 existing.last_activity = utc_now_iso()
                 await self.db.save_session(existing)
+            self._role_sessions[role] = existing.native_session_id or existing.id
             return existing
 
         session = AgentSession(
@@ -41,6 +47,7 @@ class SessionManager:
             last_activity=utc_now_iso(),
         )
         await self.db.save_session(session)
+        self._role_sessions[role] = session.native_session_id or session.id
         return session
 
     async def update_native_id(
@@ -52,6 +59,7 @@ class SessionManager:
             session.native_session_id = native_session_id
             session.last_activity = utc_now_iso()
             await self.db.save_session(session)
+            self._role_sessions[role] = native_session_id
         return session
 
     async def set_status(

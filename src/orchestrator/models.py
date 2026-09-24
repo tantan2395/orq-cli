@@ -64,9 +64,23 @@ class WorkflowDefinition(BaseModel):
     stages: Dict[str, StageConfig] = Field(default_factory=dict, description="Mapped stages")
 
 
+class Project(BaseModel):
+    """First-class project representing a persistent codebase/workspace."""
+    id: str = Field(description="Unique project identifier or slug")
+    name: str = Field(description="Human-readable project name")
+    workspace_root: str = Field(description="Absolute path to project workspace directory")
+    description: Optional[str] = Field(default="", description="Project overview")
+    default_workflow: str = Field(default="default_review_dev_loop", description="Default workflow definition ID")
+    config: Dict[str, Any] = Field(default_factory=dict, description="Project-level configuration overrides")
+    status: Literal["active", "archived"] = Field(default="active", description="Project status")
+    created_at: str = Field(default_factory=utc_now_iso)
+    updated_at: str = Field(default_factory=utc_now_iso)
+
+
 class WorkflowRun(BaseModel):
     """Runtime instance of a workflow definition."""
     run_id: str = Field(description="Unique run instance identifier")
+    project_id: Optional[str] = Field(default=None, description="Associated Project ID")
     definition_id: str = Field(description="Associated WorkflowDefinition id")
     definition_version: int = Field(default=1, description="Associated WorkflowDefinition version")
     workspace_root: str = Field(description="Target repository root path")
@@ -98,16 +112,31 @@ class Artifact(BaseModel):
     created_at: str = Field(default_factory=utc_now_iso)
 
 
+class TaskDependency(BaseModel):
+    """Directional dependency edge between tasks (task_id depends on depends_on_task_id)."""
+    task_id: str = Field(description="Dependent task ID")
+    depends_on_task_id: str = Field(description="Prerequisite task ID that must complete first")
+    workflow_run_id: str = Field(description="Associated workflow run ID")
+    created_at: str = Field(default_factory=utc_now_iso)
+
+
 class OrchestrationTask(BaseModel):
     """Durable task managed by the orchestrator engine with run-scoped idempotency."""
     task_id: str = Field(description="Task identifier")
     workflow_run_id: str = Field(description="Associated workflow run ID")
     stage_id: Optional[str] = Field(default=None, description="Workflow stage where task was created")
     idempotency_key: Optional[str] = Field(default=None, description="Optional key to prevent duplicate runs")
+    title: str = Field(default="", description="Human-readable task title")
+    description: Optional[str] = Field(default="", description="Detailed objective or scope")
     type: str = Field(description="Task category (handoff, review_request, review_decision, direct_chat, task_item)")
     requested_by: str = Field(description="Requesting role or 'human'")
     target_role: Optional[str] = Field(default=None, description="Target role to execute task")
-    status: Literal["queued", "running", "completed", "failed", "cancelled"] = Field(default="queued")
+    status: Literal["queued", "running", "completed", "failed", "cancelled"] = Field(
+        default="queued", description="Execution engine state"
+    )
+    kanban_column: Literal["backlog", "ready", "in_progress", "review", "blocked", "done"] = Field(
+        default="ready", description="Authoritative Kanban board column"
+    )
     created_at: str = Field(default_factory=utc_now_iso)
     started_at: Optional[str] = Field(default=None)
     completed_at: Optional[str] = Field(default=None)

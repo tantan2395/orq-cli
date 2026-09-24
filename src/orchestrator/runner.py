@@ -47,6 +47,7 @@ class WorkflowRunner:
         workflow_id: Optional[str] = None,
         max_turns: int = 10,
         initial_task: Optional[str] = None,
+        project_id: Optional[str] = None,
     ) -> WorkflowRun:
         """Executes the autonomous loop across stages until completed, paused, or max_turns reached."""
         await self.engine.initialize()
@@ -55,6 +56,7 @@ class WorkflowRunner:
         run = await self.engine.create_workflow_run(
             workflow_id=workflow_id,
             workspace_root=self.workspace_root,
+            project_id=project_id,
         )
         console.print(f"[bold green]✓ Started Workflow Run:[/bold green] [cyan]{run.run_id}[/cyan] (Stage: [bold]{run.current_stage}[/bold])")
 

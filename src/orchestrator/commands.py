@@ -68,15 +68,40 @@ class WorkflowControlCommand(BaseCommand):
 
 
 class TaskCreateCommand(BaseCommand):
-    """Creates a durable tracked task."""
+    """Creates a durable tracked task with optional dependencies and kanban column."""
     idempotency_key: Optional[str] = Field(default=None)
     title: str = Field(description="Task title")
-    description: str = Field(default="", description="Task details")
-    assigned_role: str = Field(description="Role responsible for the task")
+    description: str = Field(default="", description="Task details or objective")
+    target_role: Optional[str] = Field(default=None, description="Role responsible for the task")
+    requested_by: str = Field(default="human", description="Creator role or 'human'")
+    stage_id: Optional[str] = Field(default=None, description="Associated workflow stage")
+    kanban_column: Optional[Literal["backlog", "ready", "in_progress", "review", "blocked", "done"]] = Field(
+        default=None, description="Initial Kanban column override"
+    )
+    dependencies: List[str] = Field(default_factory=list, description="List of prerequisite task IDs")
+    payload: Dict[str, Any] = Field(default_factory=dict, description="Custom parameters or acceptance criteria")
 
 
 class TaskUpdateCommand(BaseCommand):
-    """Updates status or notes of an existing task."""
+    """Updates title, description, role, or column of an existing task."""
     task_id: str = Field(description="Task identifier")
-    status: Literal["queued", "running", "completed", "failed", "cancelled"]
-    notes: Optional[str] = Field(default=None)
+    title: Optional[str] = Field(default=None)
+    description: Optional[str] = Field(default=None)
+    target_role: Optional[str] = Field(default=None)
+    kanban_column: Optional[Literal["backlog", "ready", "in_progress", "review", "blocked", "done"]] = Field(default=None)
+    status: Optional[Literal["queued", "running", "completed", "failed", "cancelled"]] = Field(default=None)
+    payload: Optional[Dict[str, Any]] = Field(default=None)
+
+
+class TaskLifecycleCommand(BaseCommand):
+    """Authoritative task lifecycle transitions."""
+    task_id: str = Field(description="Task identifier")
+    action: Literal["start", "complete", "cancel", "block", "unblock"] = Field(description="Lifecycle action")
+    reason: Optional[str] = Field(default=None, description="Optional explanation for block/cancel")
+
+
+class TaskDependencyCommand(BaseCommand):
+    """Adds or removes a dependency edge between tasks."""
+    task_id: str = Field(description="Dependent task ID")
+    depends_on_task_id: str = Field(description="Prerequisite task ID")
+    action: Literal["add", "remove"] = Field(default="add")
