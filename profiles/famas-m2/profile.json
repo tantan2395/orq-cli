@@ -1,0 +1,10 @@
+{
+  "profile_id": "famas-m2",
+  "source": "codex:01a0a43e-4c6d-7833-9dc3-21e77fa0ad59",
+  "conventions": {
+    "handoff_schema": "5-point bounded slice specification",
+    "review_schema": "Independent verification with retained gates",
+    "evidence_format": "JSON probes and diff hash"
+  },
+  "extracted_context": "Candidate profile imported from codex:01a0a43e-4c6d-7833-9dc3-21e77fa0ad59. Review and edit before use."
+}
