@@ -83,6 +83,15 @@ class ContextManager:
         """Formats the immutable turn context into an explicit prompt for the agent CLI."""
         sections = [
             f"[AGENT IDENTITY CONTRACT]\nROLE: {context.role}\nWORKFLOW RUN ID: {context.workflow_run_id}\nWORKFLOW STAGE: {context.stage_id}\nOBJECTIVE: {context.objective}",
+            (
+                "[ORQ NATIVE MCP TOOLS AVAILABLE]\n"
+                "You are connected to the local Orchestrator MCP server ('orchestrator'). Native tools include:\n"
+                "- Interactive Clarification: ask_question (for multiple-choice, multi-select, and write-in human answers in the TUI)\n"
+                "- Kanban Board & Tasks: task_create, task_list, task_get, task_start, task_complete, task_cancel, task_block, task_unblock, task_update, task_add_dependency, task_dependencies\n"
+                "- Team Coordination: agents_handoff, review_request, review_decision, agents_message\n"
+                "- Workflow Control: workflow_status, workflow_pause, workflow_resume\n"
+                "In Codex CLI these tools appear prefixed as 'mcp__orchestrator__<tool_name>' or as direct tool names in Agy."
+            ),
         ]
 
         if context.role_contract:

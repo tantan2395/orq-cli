@@ -784,6 +784,33 @@ class OrchestrationEngine:
                 ))
                 return {"accepted": True, "status": "running"}
 
+            elif normalized_method in ["ask_question", "question_ask"]:
+                q_id = f"q_{uuid.uuid4().hex[:8]}"
+                payload = dict(params)
+                payload["question_id"] = q_id
+                run_id = payload.get("workflow_run_id", "")
+                role = payload.get("sender_role") or "decision_maker"
+
+                if run_id:
+                    await self.handle_control(WorkflowControlCommand(
+                        workflow_run_id=run_id,
+                        action="pause",
+                        reason=f"Waiting for human answer: {payload.get('question')}",
+                    ))
+
+                await self.events.publish(create_event(
+                    workflow_run_id=run_id,
+                    event_type="question_asked",
+                    role=role,
+                    payload=payload,
+                ))
+                return {
+                    "accepted": True,
+                    "question_id": q_id,
+                    "status": "awaiting_human_answer",
+                    "message": "Question presented to human in interactive TUI modal; workflow paused until response.",
+                }
+
             # Task CRUD
             elif normalized_method == "task_create":
                 cmd = TaskCreateCommand(**params)

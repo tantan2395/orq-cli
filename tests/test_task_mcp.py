@@ -47,6 +47,7 @@ def test_mcp_server_registers_all_15_tools():
         "workflow_status",
         "workflow_pause",
         "workflow_resume",
+        "ask_question",
     }
     for expected in expected_tools:
         assert expected in registered, f"Tool '{expected}' not found in MCP server tools"
@@ -154,3 +155,38 @@ async def test_ipc_lifecycle_and_dependencies(test_setup):
     # Delete Task 2
     del_res = await engine.handle_ipc_command("task_delete", {"task_id": t2_id})
     assert del_res["accepted"] is True
+
+
+@pytest.mark.asyncio
+async def test_ipc_ask_question_pauses_and_emits_event(test_setup):
+    import asyncio
+    db, events, engine = test_setup
+    await engine.initialize()
+    run = await engine.create_workflow_run()
+
+    published_events = []
+    async def _capture(e):
+        published_events.append(e)
+    events.add_callback(_capture)
+
+    res = await engine.handle_ipc_command("ask_question", {
+        "workflow_run_id": run.run_id,
+        "question": "Which architecture pattern do you want?",
+        "options": ["Monolith", "Microservices"],
+        "is_multi_select": False,
+        "allow_write_in": True,
+        "sender_role": "decision_maker",
+    })
+
+    assert res["accepted"] is True
+    assert res["status"] == "awaiting_human_answer"
+
+    # Verify workflow was paused
+    refreshed_run = await db.get_workflow_run(run.run_id)
+    assert refreshed_run.status == "paused"
+
+    # Verify question_asked event was emitted
+    q_events = [e for e in published_events if e.type == "question_asked"]
+    assert len(q_events) == 1
+    assert q_events[0].payload.get("question") == "Which architecture pattern do you want?"
+    assert q_events[0].payload.get("options") == ["Monolith", "Microservices"]

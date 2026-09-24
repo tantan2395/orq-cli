@@ -38,7 +38,7 @@ from orchestrator.events import EventBus, OrchestrationEvent
 from orchestrator.mcp.ipc import IPCServer
 from orchestrator.models import OrchestrationTask, Project, StageConfig, WorkflowRun, utc_now_iso
 from orchestrator.tui.kanban import KanbanBoard, TaskCard
-from orchestrator.tui.modals import NewTaskModal, ProjectPickerModal, TaskDetailModal
+from orchestrator.tui.modals import NewTaskModal, ProjectPickerModal, QuestionModal, TaskDetailModal
 
 
 class OrchestratorTUI(App):
@@ -200,6 +200,8 @@ class OrchestratorTUI(App):
     BINDINGS = [
         Binding("space", "toggle_pause", "Pause / Resume"),
         Binding("n", "new_task", "New Task"),
+        Binding("a", "answer_question", "Answer"),
+        Binding("g", "grill_me", "Grill Me"),
         Binding("p", "open_project_picker", "Switch Project"),
         Binding("1", "switch_tab_1", "Kanban"),
         Binding("2", "switch_tab_2", "Workflow"),
@@ -240,6 +242,7 @@ class OrchestratorTUI(App):
         self.current_project: Optional[Project] = None
         self.workflow_run: Optional[WorkflowRun] = None
         self._loop_task: Optional[asyncio.Task] = None
+        self._pending_question: Optional[Dict[str, Any]] = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -254,6 +257,8 @@ class OrchestratorTUI(App):
             yield Button("Pause", id="btn-pause", variant="warning")
             yield Button("Resume", id="btn-resume", variant="success")
             yield Button("New Task [n]", id="btn-new-task", variant="primary")
+            yield Button("Answer [a]", id="btn-answer", variant="warning")
+            yield Button("Grill Me [g]", id="btn-grill-me")
             yield Button("Projects [p]", id="btn-projects")
             yield Button("Cancel Run", id="btn-cancel", variant="error")
 
@@ -440,6 +445,27 @@ class OrchestratorTUI(App):
                 prefix.append(str(message_text))
                 chat_log.write(prefix)
             chat_log.scroll_end(animate=False)
+
+        elif event.type in ["interactive_question", "question_asked"]:
+            payload = event.payload or {}
+            self._pending_question = payload
+            q_text = payload.get("question", "")
+            q_role = payload.get("sender_role") or payload.get("role") or event.role or "decision_maker"
+            options = payload.get("options", [])
+            log.write(f"\n[bold magenta]❓ Interactive Question from {escape(q_role)}:[/bold magenta] [bold white]{escape(q_text)}[/bold white]")
+            if options:
+                opts_str = " | ".join(f"[{i+1}] {escape(opt)}" for i, opt in enumerate(options))
+                log.write(f"[dim yellow]Choices: {opts_str}[/dim yellow]")
+
+            chat_log = self.query_one("#chat-log", RichLog)
+            q_prefix = Text.from_markup(f"[bold magenta]❓ {escape(q_role)} asks:[/bold magenta] ")
+            q_prefix.append(q_text)
+            if options:
+                q_prefix.append(f"\n   Choices: {', '.join(options)}")
+            chat_log.write(q_prefix)
+            chat_log.scroll_end(animate=False)
+
+            self.action_answer_question()
 
         # Refresh Kanban board whenever a task or review event occurs
         if event.type in [
@@ -703,6 +729,10 @@ class OrchestratorTUI(App):
             self._ensure_runner_loop()
         elif event.button.id == "btn-new-task":
             self.action_new_task()
+        elif event.button.id == "btn-answer":
+            self.action_answer_question()
+        elif event.button.id == "btn-grill-me":
+            self.run_worker(self.action_grill_me())
         elif event.button.id == "btn-projects":
             self.action_open_project_picker()
         elif event.button.id == "btn-cancel":
@@ -812,6 +842,142 @@ class OrchestratorTUI(App):
             self._update_header()
             log = self.query_one("#activity-log", RichLog)
             log.write(f"[bold cyan]Switched active project to:[/bold cyan] {escape(proj.name)} ({escape(proj.id)})")
+
+    def action_answer_question(self) -> None:
+        """Pops up the interactive question modal for the active or pending question."""
+        if not self._pending_question:
+            # If no pending question from agent, provide a quick direction modal
+            q_data = {
+                "question": "Provide direction or response to the active agent:",
+                "options": [
+                    "Proceed with recommended plan",
+                    "Pause workflow for manual code inspection",
+                    "Decompose into smaller Kanban tasks first",
+                ],
+                "is_multi_select": False,
+                "allow_write_in": True,
+                "sender_role": self._get_current_role(),
+            }
+        else:
+            q_data = self._pending_question
+
+        def _on_modal_close(result: Optional[Dict[str, Any]]) -> None:
+            self.run_worker(self._handle_question_modal_result(result))
+
+        self.push_screen(
+            QuestionModal(
+                question=q_data.get("question"),
+                options=q_data.get("options"),
+                is_multi_select=bool(q_data.get("is_multi_select", False)),
+                allow_write_in=bool(q_data.get("allow_write_in", True)),
+                questions=q_data.get("questions"),
+                sender_role=q_data.get("sender_role") or q_data.get("role") or "decision_maker",
+            ),
+            callback=_on_modal_close,
+        )
+
+    async def action_grill_me(self) -> None:
+        """Triggers an interactive requirements & architecture interview with the decision maker."""
+        if not self.workflow_run:
+            return
+        target_role = "decision_maker"
+        instruction = (
+            "Please grill/interview me (the human operator) on the project requirements, architecture choices, "
+            "and constraints. Ask clarifying questions one at a time with structured choices using the `ask_question` tool."
+        )
+        chat_log = self.query_one("#chat-log", RichLog)
+        prefix = Text.from_markup(f"[bold cyan]Me → {escape(target_role)} [Grill Me]:[/bold cyan] ")
+        prefix.append(instruction)
+        chat_log.write(prefix)
+        chat_log.scroll_end(animate=False)
+
+        activity_log = self.query_one("#activity-log", RichLog)
+        activity_log.write(f"[bold cyan]Human initiated Grill Me interview with {escape(target_role)}.[/bold cyan]")
+
+        await self.engine.handle_human_intervention(HumanInterventionCommand(
+            workflow_run_id=self.workflow_run.run_id,
+            target_role=target_role,
+            message=instruction,
+        ))
+        if self.workflow_run.status == "paused":
+            await self.engine.handle_control(WorkflowControlCommand(
+                workflow_run_id=self.workflow_run.run_id, action="resume"
+            ))
+        refreshed = await self.db.get_workflow_run(self.workflow_run.run_id)
+        if refreshed:
+            self.workflow_run = refreshed
+        self._update_header()
+        self._ensure_runner_loop()
+
+    async def _handle_question_modal_result(self, result: Optional[Dict[str, Any]]) -> None:
+        if not result or not self.workflow_run:
+            return
+
+        target_role = result.get("sender_role") or "decision_maker"
+        answers = result.get("answers", [])
+        overall_selected = result.get("selected", [])
+        write_in = result.get("write_in", "")
+
+        # Clear pending question
+        self._pending_question = None
+
+        # Build formatted human response text
+        if len(answers) > 1:
+            lines = ["[HUMAN OPERATOR ANSWERS]"]
+            for idx, a in enumerate(answers):
+                lines.append(f"{idx+1}. Question: {a.get('question')}")
+                if a.get("selected"):
+                    lines.append(f"   Selected: {', '.join(a['selected'])}")
+                if a.get("write_in"):
+                    lines.append(f"   Notes: {a['write_in']}")
+        else:
+            q_title = result.get("question") or (answers[0].get("question") if answers else "Question")
+            lines = [f"[ANSWER TO QUESTION: {q_title}]"]
+            if overall_selected:
+                if len(overall_selected) == 1:
+                    lines.append(f"Selected: {overall_selected[0]}")
+                else:
+                    lines.append(f"Selected: {', '.join(overall_selected)}")
+            if write_in:
+                lines.append(f"Additional notes / Write-in: {write_in}")
+
+        answer_text = "\n".join(lines)
+
+        summary_parts = []
+        if overall_selected:
+            summary_parts.append(", ".join(overall_selected))
+        if write_in:
+            summary_parts.append(f"Notes: {write_in}")
+        summary_short = " | ".join(summary_parts) if summary_parts else "Acknowledged"
+
+        # Log to Direct Chat and Activity Log
+        chat_log = self.query_one("#chat-log", RichLog)
+        me_prefix = Text.from_markup(f"[bold cyan]Me → {escape(target_role)} [Answer]:[/bold cyan] ")
+        me_prefix.append(summary_short)
+        chat_log.write(me_prefix)
+        chat_log.scroll_end(animate=False)
+
+        activity_log = self.query_one("#activity-log", RichLog)
+        activity_log.write(f"[bold green]✓ Answer Submitted to {escape(target_role)}:[/bold green] {escape(summary_short)}")
+
+        # Dispatch human intervention to engine
+        await self.engine.handle_human_intervention(HumanInterventionCommand(
+            workflow_run_id=self.workflow_run.run_id,
+            target_role=target_role,
+            message=answer_text,
+        ))
+
+        # Auto-resume if workflow was paused
+        if self.workflow_run.status == "paused":
+            await self.engine.handle_control(WorkflowControlCommand(
+                workflow_run_id=self.workflow_run.run_id, action="resume"
+            ))
+
+        refreshed = await self.db.get_workflow_run(self.workflow_run.run_id)
+        if refreshed:
+            self.workflow_run = refreshed
+        self._update_header()
+        self._ensure_runner_loop()
 
     def action_switch_tab_1(self) -> None:
         self.query_one("#tabs", TabbedContent).active = "tab-kanban"

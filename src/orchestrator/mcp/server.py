@@ -149,6 +149,35 @@ def create_mcp_server(ipc_client: Optional[IPCClient] = None) -> MCPServer:
         res = await client.call("workflow_resume", {"workflow_run_id": workflow_run_id})
         return json.dumps(res)
 
+    @server.tool(
+        name="ask_question",
+        description=(
+            "Ask the human operator structured clarifying question(s) with selectable choices, "
+            "multi-select options, or write-in responses (like agy grill-me). Pauses the workflow "
+            "and displays an interactive question modal in the TUI until answered."
+        ),
+    )
+    async def ask_question(
+        workflow_run_id: str,
+        question: Optional[str] = None,
+        options: Optional[List[str]] = None,
+        is_multi_select: bool = False,
+        allow_write_in: bool = True,
+        questions: Optional[List[Dict[str, Any]]] = None,
+        sender_role: str = "decision_maker",
+    ) -> str:
+        payload = {
+            "workflow_run_id": workflow_run_id,
+            "question": question or (questions[0].get("question", "") if questions else ""),
+            "options": options or (questions[0].get("options", []) if questions else []),
+            "is_multi_select": is_multi_select or (questions[0].get("is_multi_select", False) if questions else False),
+            "allow_write_in": allow_write_in,
+            "questions": questions or [],
+            "sender_role": sender_role,
+        }
+        res = await client.call("ask_question", payload)
+        return json.dumps(res)
+
     # ---------------------------------------------------------
     # Task Management & Kanban MCP Tools
     # ---------------------------------------------------------

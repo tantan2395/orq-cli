@@ -178,4 +178,77 @@ async def test_tui_agent_activity_message_renders_in_chat_and_activity():
         assert any("Orq currently exposes seven MCP tools" in line for line in activity_lines), f"Expected response in activity_log: {activity_lines}"
 
 
+@pytest.mark.asyncio
+async def test_tui_question_modal_submission():
+    """Verify that QuestionModal handles selections and write-ins, and submits human intervention."""
+    from orchestrator.tui.modals import QuestionModal
+    from textual.widgets import Input, Button
+
+    app = OrchestratorTUI()
+    async with app.run_test() as pilot:
+        # Pause workflow first to test auto-resume
+        app.workflow_run.status = "paused"
+        await app.db.save_workflow_run(app.workflow_run)
+
+        # Push QuestionModal
+        app.action_answer_question()
+        await pilot.pause()
+
+        # Check that QuestionModal is the active screen
+        assert isinstance(app.screen, QuestionModal)
+
+        # Type in write-in response
+        writein = app.screen.query_one("#writein_0", Input)
+        writein.value = "Use SQLite for local embedded storage"
+
+        # Submit modal
+        await pilot.click("#btn-submit")
+        await pilot.pause()
+
+        # Modal should be dismissed
+        assert not isinstance(app.screen, QuestionModal)
+
+        # Verify task was saved in DB as human intervention
+        tasks = await app.db.list_tasks(app.workflow_run.run_id)
+        human_tasks = [t for t in tasks if t.type == "human_intervention"]
+        assert len(human_tasks) >= 1
+        last_msg = human_tasks[-1].payload.get("message", "")
+        assert "Use SQLite for local embedded storage" in last_msg
+
+        # Verify workflow was auto-resumed
+        assert app.workflow_run.status == "running"
+
+
+@pytest.mark.asyncio
+async def test_tui_question_asked_event_triggers_modal():
+    """Verify that a question_asked event from an agent pushes QuestionModal automatically."""
+    from orchestrator.events import create_event
+    from orchestrator.tui.modals import QuestionModal
+
+    app = OrchestratorTUI()
+    async with app.run_test() as pilot:
+        evt = create_event(
+            workflow_run_id=app.workflow_run.run_id,
+            event_type="question_asked",
+            role="decision_maker",
+            payload={
+                "question": "Which database engine would you prefer?",
+                "options": ["PostgreSQL", "SQLite", "DuckDB"],
+                "is_multi_select": False,
+                "allow_write_in": True,
+            },
+        )
+        await app.events.publish(evt)
+        await pilot.pause()
+
+        # Modal should be active
+        assert isinstance(app.screen, QuestionModal)
+        assert app.screen.question_specs[0]["question"] == "Which database engine would you prefer?"
+
+        # Dismiss modal with skip
+        await pilot.click("#btn-skip")
+        await pilot.pause()
+        assert not isinstance(app.screen, QuestionModal)
+
+
 

@@ -5,7 +5,7 @@ from rich.markup import escape
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, Select, Static
+from textual.widgets import Button, Checkbox, Input, Label, RadioButton, RadioSet, Select, Static
 
 from orchestrator.models import OrchestrationTask, Project
 
@@ -291,3 +291,195 @@ class ProjectPickerModal(ModalScreen[Optional[str]]):
                 self.dismiss(None)
         else:
             self.dismiss(None)
+
+
+class QuestionModal(ModalScreen[Optional[Dict[str, Any]]]):
+    """Interactive question modal supporting multiple choice, multi-select, and write-in answers (Grill-Me style)."""
+
+    DEFAULT_CSS = """
+    QuestionModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.7);
+    }
+    #question-container {
+        width: 86;
+        height: auto;
+        max-height: 85%;
+        background: #0f172a;
+        border: solid #c084fc;
+        padding: 1 2;
+    }
+    #question-header {
+        text-style: bold;
+        color: #c084fc;
+        margin-bottom: 1;
+        border-bottom: solid #334155;
+        padding-bottom: 1;
+    }
+    .question-block {
+        margin-bottom: 1;
+        background: #1e293b;
+        padding: 1;
+        border: solid #334155;
+    }
+    .question-title {
+        color: #f8fafc;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    .question-sub {
+        color: #94a3b8;
+        margin-bottom: 1;
+    }
+    .options-scroll {
+        margin: 1 0;
+        max-height: 10;
+    }
+    .writein-field {
+        margin-top: 0;
+        margin-bottom: 1;
+    }
+    #question-actions {
+        margin-top: 1;
+        height: 3;
+        align-horizontal: right;
+    }
+    Button {
+        margin-left: 1;
+    }
+    """
+
+    BINDINGS = [
+        ("escape", "dismiss_cancel", "Skip / Cancel"),
+    ]
+
+    def __init__(
+        self,
+        question: Optional[str] = None,
+        options: Optional[List[str]] = None,
+        is_multi_select: bool = False,
+        allow_write_in: bool = True,
+        questions: Optional[List[Dict[str, Any]]] = None,
+        sender_role: str = "decision_maker",
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.sender_role = sender_role
+        self.allow_write_in = allow_write_in
+
+        if questions:
+            self.question_specs = questions
+        else:
+            self.question_specs = [{
+                "question": question or "Please provide direction or feedback:",
+                "options": options or [],
+                "is_multi_select": is_multi_select,
+            }]
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="question-container"):
+            yield Label(f"[bold magenta]❓ Interactive Question from {escape(self.sender_role)}[/bold magenta]", id="question-header")
+
+            for q_idx, spec in enumerate(self.question_specs):
+                q_text = spec.get("question", "")
+                opts = spec.get("options", [])
+                multi = spec.get("is_multi_select", False)
+
+                with Vertical(classes="question-block"):
+                    num_prefix = f"[{q_idx+1}] " if len(self.question_specs) > 1 else ""
+                    yield Static(f"[bold white]{num_prefix}{escape(q_text)}[/bold white]", classes="question-title")
+
+                    if opts:
+                        hint = "Select all options that apply (multiple choice):" if multi else "Select one option:"
+                        yield Label(f"[dim]{hint}[/dim]", classes="question-sub")
+                        if multi:
+                            with VerticalScroll(classes="options-scroll"):
+                                for opt_idx, opt in enumerate(opts):
+                                    yield Checkbox(label=opt, id=f"chk_{q_idx}_{opt_idx}")
+                        else:
+                            with VerticalScroll(classes="options-scroll"):
+                                with RadioSet(id=f"radios_{q_idx}"):
+                                    for opt_idx, opt in enumerate(opts):
+                                        yield RadioButton(label=opt, id=f"opt_{q_idx}_{opt_idx}", value=(opt_idx == 0))
+
+                    if self.allow_write_in:
+                        yield Label("[dim]Write-in response / custom feedback (optional):[/dim]", classes="question-sub")
+                        yield Input(
+                            placeholder="Type your custom answer or notes here...",
+                            id=f"writein_{q_idx}",
+                            classes="writein-field",
+                        )
+
+            with Horizontal(id="question-actions"):
+                yield Button("Skip / Cancel", id="btn-skip")
+                yield Button("Submit Answer", id="btn-submit", variant="primary")
+
+    def action_dismiss_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-submit":
+            self._submit()
+        elif event.button.id == "btn-skip":
+            self.dismiss(None)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._submit()
+
+    def _submit(self) -> None:
+        answers = []
+        overall_selected = []
+        overall_write_ins = []
+
+        for q_idx, spec in enumerate(self.question_specs):
+            q_text = spec.get("question", "")
+            opts = spec.get("options", [])
+            multi = spec.get("is_multi_select", False)
+
+            selected_opts: List[str] = []
+            if opts:
+                if multi:
+                    for opt_idx, _ in enumerate(opts):
+                        try:
+                            cb = self.query_one(f"#chk_{q_idx}_{opt_idx}", Checkbox)
+                            if cb.value:
+                                selected_opts.append(str(cb.label))
+                        except Exception:
+                            pass
+                else:
+                    try:
+                        rs = self.query_one(f"#radios_{q_idx}", RadioSet)
+                        if rs.pressed_button:
+                            selected_opts.append(str(rs.pressed_button.label))
+                    except Exception:
+                        pass
+
+            write_in_val = ""
+            if self.allow_write_in:
+                try:
+                    inp = self.query_one(f"#writein_{q_idx}", Input)
+                    write_in_val = inp.value.strip()
+                except Exception:
+                    pass
+
+            answers.append({
+                "question": q_text,
+                "selected": selected_opts,
+                "write_in": write_in_val,
+            })
+            overall_selected.extend(selected_opts)
+            if write_in_val:
+                overall_write_ins.append(write_in_val)
+
+        # If user provided nothing at all on an options question, prompt them
+        if not overall_selected and not overall_write_ins and any(spec.get("options") for spec in self.question_specs):
+            self.notify("Please select an option or provide a write-in response.", severity="warning")
+            return
+
+        self.dismiss({
+            "sender_role": self.sender_role,
+            "answers": answers,
+            "question": self.question_specs[0].get("question", ""),
+            "selected": answers[0]["selected"] if answers else [],
+            "write_in": answers[0]["write_in"] if answers else "",
+        })
