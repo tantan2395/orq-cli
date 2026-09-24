@@ -15,6 +15,8 @@ class AgyAdapter(BaseAgentAdapter):
     def __init__(self, binary_path: Optional[str] = None):
         super().__init__(agent_name="agy")
         self.binary_path = binary_path or shutil.which("agy") or "/home/tantan/.local/bin/agy"
+        self._text_buffers: Dict[int, str] = {}
+        self._emitted_message: bool = False
 
     def build_command(
         self,
@@ -49,6 +51,8 @@ class AgyAdapter(BaseAgentAdapter):
         session_id: Optional[str] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Spawns agy -p and yields structured activity items."""
+        self._text_buffers.clear()
+        self._emitted_message = False
         cmd = self.build_command(prompt, model, reasoning, workspace_root, session_id)
 
         try:
@@ -99,11 +103,60 @@ class AgyAdapter(BaseAgentAdapter):
         if not isinstance(data, dict):
             return {"type": "agent_message", "content": str(data)}
 
-        # Capture conversation ID
-        conv_id = data.get("conversation_id") or data.get("session_id")
+        # Capture conversation ID from any known location
+        conv_id = (
+            data.get("conversation_id")
+            or data.get("session_id")
+            or (data.get("init", {}).get("conversation_id") if isinstance(data.get("init"), dict) else None)
+            or (data.get("step_update", {}).get("conversation_id") if isinstance(data.get("step_update"), dict) else None)
+            or (data.get("result", {}).get("conversation_id") if isinstance(data.get("result"), dict) else None)
+        )
         if conv_id:
             self.active_session_id = str(conv_id)
 
+        # 1. Native agy stream-json format
+        event_name = data.get("event")
+        if event_name == "step_update":
+            su = data.get("step_update") or {}
+            step_type = su.get("step_type")
+            state = su.get("state")
+            step_idx = su.get("step_index", 0)
+
+            if step_type == "tool":
+                tool_info = su.get("tool_info") or {}
+                tool_name = su.get("tool_name") or tool_info.get("name") or "unknown_tool"
+                if state == "ACTIVE":
+                    return {
+                        "type": "tool_call",
+                        "name": tool_name,
+                        "args": tool_info.get("parameters") or {},
+                    }
+                elif state == "DONE":
+                    output = tool_info.get("output", "")
+                    return {
+                        "type": "tool_result",
+                        "output": str(output),
+                    }
+
+            elif step_type == "agent_response":
+                delta = su.get("text_delta") or ""
+                self._text_buffers[step_idx] = self._text_buffers.get(step_idx, "") + delta
+                if state == "DONE":
+                    content = self._text_buffers.pop(step_idx, "")
+                    if content.strip():
+                        self._emitted_message = True
+                        return {"type": "agent_message", "content": content}
+                return None
+
+        elif event_name == "result":
+            res = data.get("result") or {}
+            resp = res.get("response")
+            if not self._emitted_message and resp and str(resp).strip():
+                self._emitted_message = True
+                return {"type": "agent_message", "content": str(resp)}
+            return None
+
+        # 2. Fallback for generic format
         ev_type = str(data.get("type", "")).lower()
 
         # Tool calls

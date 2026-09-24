@@ -10,7 +10,7 @@ from orchestrator.dispatcher import Dispatcher
 from orchestrator.engine import OrchestrationEngine
 from orchestrator.events import EventBus
 from orchestrator.mcp.ipc import IPCServer
-from orchestrator.models import OrchestrationTask, StageConfig, WorkflowRun
+from orchestrator.models import OrchestrationTask, StageConfig, WorkflowRun, utc_now_iso
 
 console = Console()
 
@@ -89,6 +89,10 @@ class WorkflowRunner:
                         status="running",
                         payload={"task": stage_cfg.description or f"Execute stage {run.current_stage}"},
                     )
+                else:
+                    pending_task.status = "running"
+                    pending_task.started_at = utc_now_iso()
+                    await self.db.save_task(pending_task)
 
                 # Generate immutable turn context
                 turn_ctx = self.engine.context_manager.create_turn_context(
@@ -113,6 +117,12 @@ class WorkflowRunner:
                         console.print(f"[white]{activity.get('content')}[/white]", end="")
                     elif act_type == "error":
                         console.print(f"[bold red]✗ Error:[/bold red] {activity.get('error')}")
+
+                # Mark task completed in DB if it was a stored task
+                if pending_task and not pending_task.task_id.startswith("init_task_"):
+                    pending_task.status = "completed"
+                    pending_task.completed_at = utc_now_iso()
+                    await self.db.save_task(pending_task)
 
                 # Refresh run state from DB
                 refreshed = await self.db.get_workflow_run(run.run_id)

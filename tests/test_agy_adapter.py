@@ -59,3 +59,41 @@ def test_agy_adapter_parse_lines():
     parsed_msg = adapter._parse_line(msg_line)
     assert parsed_msg["type"] == "agent_message"
     assert "Writing" in parsed_msg["content"]
+
+
+def test_agy_adapter_native_stream_json_events():
+    adapter = AgyAdapter()
+
+    # 1. init event with conversation_id
+    init_line = '{"event":"init","conversation_id":"conv-abc-123","init":{"cwd":"/repo"}}'
+    assert adapter._parse_line(init_line) is None
+    assert adapter.active_session_id == "conv-abc-123"
+
+    # 2. step_update tool call (ACTIVE)
+    tool_active = '{"event":"step_update","step_update":{"conversation_id":"conv-abc-123","step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"echo hello"}}}}'
+    ev = adapter._parse_line(tool_active)
+    assert ev is not None
+    assert ev["type"] == "tool_call"
+    assert ev["name"] == "run_command"
+    assert ev["args"] == {"CommandLine": "echo hello"}
+
+    # 3. step_update tool result (DONE)
+    tool_done = '{"event":"step_update","step_update":{"conversation_id":"conv-abc-123","step_index":2,"state":"DONE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"echo hello"},"output":"hello\\n"}}}'
+    ev = adapter._parse_line(tool_done)
+    assert ev is not None
+    assert ev["type"] == "tool_result"
+    assert "hello" in ev["output"]
+
+    # 4. step_update agent response streaming and completion
+    resp_chunk1 = '{"event":"step_update","step_update":{"conversation_id":"conv-abc-123","step_index":3,"state":"ACTIVE","step_type":"agent_response","text_delta":"Task is "}}'
+    assert adapter._parse_line(resp_chunk1) is None
+    resp_chunk2 = '{"event":"step_update","step_update":{"conversation_id":"conv-abc-123","step_index":3,"state":"DONE","step_type":"agent_response","text_delta":"complete."}}'
+    ev = adapter._parse_line(resp_chunk2)
+    assert ev is not None
+    assert ev["type"] == "agent_message"
+    assert ev["content"] == "Task is complete."
+
+    # 5. result event fallback
+    res_line = '{"event":"result","result":{"conversation_id":"conv-abc-123","status":"SUCCESS","response":"Final output."}}'
+    # Since message was already emitted for this turn, result does not duplicate
+    assert adapter._parse_line(res_line) is None

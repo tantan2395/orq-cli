@@ -468,6 +468,12 @@ class OrchestratorTUI(App):
                     payload={"task": stage_cfg.description or f"Execute stage {self.workflow_run.current_stage}"},
                 )
 
+            if pending_task and pending_task.task_id and not pending_task.task_id.startswith("turn_task_"):
+                pending_task.status = "running"
+                pending_task.started_at = utc_now_iso()
+                await self.db.save_task(pending_task)
+                await self._refresh_tasks()
+
             turn_ctx = self.engine.context_manager.create_turn_context(
                 workflow_run=self.workflow_run,
                 role_config=self.config.roles[role_name],
@@ -483,11 +489,12 @@ class OrchestratorTUI(App):
                 if self.workflow_run.status != "running":
                     break
 
-            # Mark queued task completed in DB if it was a stored task
+            # Mark task completed in DB if it was a stored task
             if pending_task and pending_task.task_id and not pending_task.task_id.startswith("turn_task_"):
                 pending_task.status = "completed"
                 pending_task.completed_at = utc_now_iso()
                 await self.db.save_task(pending_task)
+                await self._refresh_tasks()
 
             # Refresh status
             refreshed = await self.db.get_workflow_run(self.workflow_run.run_id)

@@ -10,17 +10,34 @@ class ContextManager:
     """Projects bounded, immutable context snapshots for agent turns."""
 
     def __init__(self, base_prompts_dir: Optional[Path] = None):
-        self.base_prompts_dir = base_prompts_dir or Path("prompts")
+        if base_prompts_dir:
+            self.base_prompts_dir = Path(base_prompts_dir)
+        else:
+            cwd_prompts = Path.cwd() / "prompts"
+            package_root_prompts = Path(__file__).resolve().parent.parent.parent / "prompts"
+            self.base_prompts_dir = cwd_prompts if cwd_prompts.exists() else package_root_prompts
 
     def load_role_contract(self, prompt_file: Optional[str]) -> str:
         """Reads behavioral contract markdown from prompt file."""
         if not prompt_file:
             return ""
         path = Path(prompt_file)
-        if not path.is_absolute():
-            path = self.base_prompts_dir / path.name
-        if path.exists():
+        if path.is_absolute() and path.exists() and path.is_file():
             return path.read_text(encoding="utf-8").strip()
+
+        package_root_prompts = Path(__file__).resolve().parent.parent.parent / "prompts"
+        candidates = [
+            self.base_prompts_dir / path.name,
+            self.base_prompts_dir / path,
+            Path.cwd() / path,
+            Path.cwd() / "prompts" / path.name,
+            package_root_prompts / path.name,
+            package_root_prompts.parent / path,
+        ]
+        for candidate in candidates:
+            if candidate.exists() and candidate.is_file():
+                return candidate.read_text(encoding="utf-8").strip()
+
         return ""
 
     def create_turn_context(
