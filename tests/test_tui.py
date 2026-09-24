@@ -102,3 +102,40 @@ async def test_tui_message_sent_renders_in_chat():
         matching = any("Here is the list of Orq MCP tools" in line for line in lines)
         assert matching, f"Expected message in chat_log lines, got: {lines}"
 
+
+@pytest.mark.asyncio
+async def test_tui_defaults_to_awaiting_task():
+    """Verify that launching TUI with no initial task enters AWAITING TASK state."""
+    app = OrchestratorTUI()
+    async with app.run_test() as pilot:
+        state_badge = app.query_one("#status-state-badge", Label)
+        # Give on_mount a brief moment
+        await pilot.pause()
+        assert "AWAITING TASK" in str(state_badge.render())
+
+        # Verify welcome instruction in chat log
+        chat_log = app.query_one("#chat-log", RichLog)
+        lines = [line.text for line in chat_log.lines]
+        assert any("Welcome to Orchestrator TUI" in line for line in lines)
+
+
+@pytest.mark.asyncio
+async def test_tui_initial_task_from_cli():
+    """Verify that launching TUI with initial_task queues it immediately on mount."""
+    app = OrchestratorTUI(initial_task="Audit security configuration")
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        # Check task was queued in DB
+        tasks = await app.db.list_tasks(app.workflow_run.run_id)
+        init_tasks = [t for t in tasks if t.type == "human_intervention"]
+        assert len(init_tasks) >= 1
+        assert init_tasks[0].payload.get("task") == "Audit security configuration"
+        assert init_tasks[0].target_role == "decision_maker"
+
+        # Check it is logged in chat
+        chat_log = app.query_one("#chat-log", RichLog)
+        lines = [line.text for line in chat_log.lines]
+        assert any("Audit security configuration" in line for line in lines)
+
+

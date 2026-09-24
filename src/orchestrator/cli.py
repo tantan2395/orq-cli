@@ -53,17 +53,24 @@ def cmd_run(args: argparse.Namespace) -> int:
         config=cfg,
         workspace_root=args.workspace,
     )
-    final_run = asyncio.run(runner.run(workflow_id=args.workflow, max_turns=args.max_turns))
+    initial_task = getattr(args, "task", None) or getattr(args, "task_pos", None)
+    final_run = asyncio.run(runner.run(
+        workflow_id=args.workflow,
+        max_turns=args.max_turns,
+        initial_task=initial_task,
+    ))
     return 0 if final_run.status == "completed" else 1
 
 
 def cmd_tui(args: argparse.Namespace) -> int:
     """Launches the interactive Textual TUI human control plane."""
     cfg = load_config(Path(args.config) if args.config else None)
+    initial_task = getattr(args, "task", None) or getattr(args, "task_pos", None)
     app = OrchestratorTUI(
         config=cfg,
         workspace_root=args.workspace,
         workflow_id=args.workflow,
+        initial_task=initial_task,
     )
     app.run()
     return 0
@@ -105,7 +112,7 @@ def cmd_profile_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="orq",
         description="orq: Local multi-agent orchestration runtime for coding agents",
@@ -118,6 +125,8 @@ def main() -> None:
 
     # run
     p_run = subparsers.add_parser("run", help="Run workflow headlessly")
+    p_run.add_argument("task_pos", nargs="?", default=None, help="Initial task or goal for the workflow")
+    p_run.add_argument("--task", "-t", default=None, help="Initial task or goal for the workflow")
     p_run.add_argument("--workflow", default=None, help="Workflow ID to run")
     p_run.add_argument("--workspace", default=".", help="Target workspace root")
     p_run.add_argument("--max-turns", type=int, default=10, help="Maximum turns to execute")
@@ -125,6 +134,8 @@ def main() -> None:
 
     # tui
     p_tui = subparsers.add_parser("tui", help="Launch interactive Textual TUI control plane")
+    p_tui.add_argument("task_pos", nargs="?", default=None, help="Initial task or question for the lead agent")
+    p_tui.add_argument("--task", "-t", default=None, help="Initial task or question for the lead agent")
     p_tui.add_argument("--workflow", default=None, help="Workflow ID to run")
     p_tui.add_argument("--workspace", default=".", help="Target workspace root")
     p_tui.add_argument("--config", default=None, help="Path to orchestrator.yaml")
@@ -140,6 +151,11 @@ def main() -> None:
     p_insp = prof_subs.add_parser("inspect", help="Inspect candidate profile")
     p_insp.add_argument("target", help="Profile name to inspect")
 
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
 
     if args.command == "doctor":
@@ -154,7 +170,7 @@ def main() -> None:
         elif args.profile_action == "inspect":
             sys.exit(cmd_profile_inspect(args))
         else:
-            p_prof.print_help()
+            parser.print_help()
             sys.exit(1)
     else:
         parser.print_help()

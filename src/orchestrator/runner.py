@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from typing import Optional
+import uuid
 from rich.console import Console
 
 from orchestrator.config import OrchestratorConfig, get_default_config
@@ -45,6 +46,7 @@ class WorkflowRunner:
         self,
         workflow_id: Optional[str] = None,
         max_turns: int = 10,
+        initial_task: Optional[str] = None,
     ) -> WorkflowRun:
         """Executes the autonomous loop across stages until completed, paused, or max_turns reached."""
         await self.engine.initialize()
@@ -55,6 +57,25 @@ class WorkflowRunner:
             workspace_root=self.workspace_root,
         )
         console.print(f"[bold green]✓ Started Workflow Run:[/bold green] [cyan]{run.run_id}[/cyan] (Stage: [bold]{run.current_stage}[/bold])")
+
+        if initial_task and initial_task.strip():
+            definition = self.config.workflows.get(run.definition_id)
+            initial_role = "decision_maker"
+            if definition and run.current_stage in definition.stages:
+                initial_role = definition.stages[run.current_stage].role
+
+            task = OrchestrationTask(
+                task_id=f"human_init_{uuid.uuid4().hex[:8]}",
+                workflow_run_id=run.run_id,
+                stage_id=run.current_stage,
+                type="human_intervention",
+                requested_by="human",
+                target_role=initial_role,
+                status="queued",
+                payload={"task": initial_task.strip()},
+            )
+            await self.db.save_task(task)
+            console.print(f"[bold cyan]Initial task queued for role '{initial_role}':[/bold cyan] {initial_task.strip()}")
 
         turn_count = 0
 

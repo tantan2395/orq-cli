@@ -24,3 +24,31 @@ def test_cli_profile_import_and_inspect(tmp_path: Path, monkeypatch):
     inspect_args = Namespace(target="test_target_prof")
     res_insp = cmd_profile_inspect(inspect_args)
     assert res_insp == 0
+
+
+def test_cli_parser_task_args():
+    from orchestrator.cli import build_parser
+
+    parser = build_parser()
+
+    # tui positional
+    args = parser.parse_args(["tui", "Build a login page"])
+    assert args.command == "tui"
+    assert args.task_pos == "Build a login page"
+    assert args.task is None
+
+    # tui --task
+    args = parser.parse_args(["tui", "--task", "Refactor auth module"])
+    assert args.command == "tui"
+    assert args.task == "Refactor auth module"
+
+    # run positional
+    args = parser.parse_args(["run", "Execute tests"])
+    assert args.command == "run"
+    assert args.task_pos == "Execute tests"
+
+    # run --task
+    args = parser.parse_args(["run", "-t", "Run linter"])
+    assert args.command == "run"
+    assert args.task == "Run linter"
+

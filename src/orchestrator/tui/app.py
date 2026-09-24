@@ -3,6 +3,7 @@
 import asyncio
 from pathlib import Path
 from typing import Optional
+import uuid
 from rich.markdown import Markdown
 from rich.markup import escape
 from rich.panel import Panel
@@ -182,11 +183,13 @@ class OrchestratorTUI(App):
         config: Optional[OrchestratorConfig] = None,
         workspace_root: Optional[str] = None,
         workflow_id: Optional[str] = None,
+        initial_task: Optional[str] = None,
     ):
         super().__init__()
         self.config = config or get_default_config()
         self.workspace_root = workspace_root or self.config.workspace.workspace_root
         self.workflow_id = workflow_id or self.config.active_workflow
+        self.initial_task = initial_task
 
         self.db = Database(self.config.sqlite_db_path)
         self.events = EventBus()
@@ -263,7 +266,36 @@ class OrchestratorTUI(App):
             workflow_id=self.workflow_id,
             workspace_root=self.workspace_root,
         )
-        self._update_header()
+
+        chat_log = self.query_one("#chat-log", RichLog)
+        activity_log = self.query_one("#activity-log", RichLog)
+
+        if self.initial_task and self.initial_task.strip():
+            definition = self.config.workflows.get(self.workflow_run.definition_id)
+            initial_role = "decision_maker"
+            if definition and self.workflow_run.current_stage in definition.stages:
+                initial_role = definition.stages[self.workflow_run.current_stage].role
+
+            task = OrchestrationTask(
+                task_id=f"human_init_{uuid.uuid4().hex[:8]}",
+                workflow_run_id=self.workflow_run.run_id,
+                stage_id=self.workflow_run.current_stage,
+                type="human_intervention",
+                requested_by="human",
+                target_role=initial_role,
+                status="queued",
+                payload={"task": self.initial_task.strip()},
+            )
+            await self.db.save_task(task)
+            chat_log.write(f"[bold cyan]Human (CLI):[/bold cyan] {escape(self.initial_task.strip())}")
+            activity_log.write(f"[bold cyan]System:[/bold cyan] Initial task queued for [bold yellow]{escape(initial_role)}[/bold yellow]: {escape(self.initial_task.strip())}")
+            self._update_header()
+        else:
+            chat_log.write("[bold cyan]System:[/bold cyan] Welcome to [bold]Orchestrator TUI[/bold].")
+            chat_log.write("[dim]Workflow initialized. Type your task or question below in Direct Chat, or switch roles to converse directly.[/dim]\n")
+            activity_log.write("[bold cyan]System:[/bold cyan] Ready & awaiting human task. Send a task via Direct Chat or launch with: [bold white]orq tui \"<task>\"[/bold white].")
+            self._update_header(state_override="AWAITING TASK")
+
         self._render_dag()
 
         # Start autonomous runner in background
@@ -359,7 +391,7 @@ class OrchestratorTUI(App):
                 chat_log.write(f"[bold green]{escape(str(sender))} → {escape(str(recipient))}:[/bold green] {escape(str(message_text))}")
             chat_log.scroll_end(animate=False)
 
-    def _update_header(self) -> None:
+    def _update_header(self, state_override: Optional[str] = None) -> None:
         if not self.workflow_run:
             return
         run_info = self.query_one("#status-run-info", Label)
@@ -374,8 +406,16 @@ class OrchestratorTUI(App):
         run_info.update(f"Run: [cyan]{escape(self.workflow_run.run_id)}[/cyan] | Stage: [bold]{escape(self.workflow_run.current_stage)}[/bold]")
         role_badge.update(f"Role: [bold yellow]{escape(current_role)}[/bold yellow]")
 
-        status_color = "green" if self.workflow_run.status == "running" else "yellow" if self.workflow_run.status == "paused" else "blue"
-        state_badge.update(f"State: [bold {status_color}]{escape(self.workflow_run.status.upper())}[/bold {status_color}]")
+        current_state = state_override or self.workflow_run.status
+        if current_state == "AWAITING TASK":
+            status_color = "cyan"
+        elif current_state == "running":
+            status_color = "green"
+        elif current_state == "paused":
+            status_color = "yellow"
+        else:
+            status_color = "blue"
+        state_badge.update(f"State: [bold {status_color}]{escape(current_state.upper())}[/bold {status_color}]")
 
     def _render_dag(self) -> None:
         dag = self.query_one("#dag-container", VerticalScroll)
@@ -466,18 +506,17 @@ class OrchestratorTUI(App):
                     role_name = human_task.target_role
 
             if not pending_task:
-                pending_task = OrchestrationTask(
-                    task_id=f"turn_task_{self.workflow_run.current_stage}",
-                    workflow_run_id=self.workflow_run.run_id,
-                    stage_id=self.workflow_run.current_stage,
-                    type="stage_task",
-                    requested_by="engine",
-                    target_role=role_name,
-                    status="running",
-                    payload={"task": stage_cfg.description or f"Execute stage {self.workflow_run.current_stage}"},
-                )
+                # In interactive TUI mode, wait for user input or task queueing instead of fabricating unprompted turns
+                self._update_header(state_override="AWAITING TASK")
+                await asyncio.sleep(0.5)
+                refreshed = await self.db.get_workflow_run(self.workflow_run.run_id)
+                if refreshed:
+                    self.workflow_run = refreshed
+                continue
 
-            if pending_task and pending_task.task_id and not pending_task.task_id.startswith("turn_task_"):
+            self._update_header()
+
+            if pending_task.task_id and not pending_task.task_id.startswith("turn_task_"):
                 pending_task.status = "running"
                 pending_task.started_at = utc_now_iso()
                 await self.db.save_task(pending_task)
