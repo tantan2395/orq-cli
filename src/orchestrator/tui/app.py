@@ -282,11 +282,32 @@ class OrchestratorTUI(App):
             if act_type == "status":
                 log.write(f"[dim]• {escape(str(activity.get('status', '')))}[/dim]")
             elif act_type == "tool_call":
-                log.write(f"[yellow]⚡ Tool Call:[/yellow] [bold]{escape(str(activity.get('name', '')))}[/bold]({escape(str(activity.get('args', '')))})")
+                tool_name = str(activity.get("name", ""))
+                args = activity.get("args") or {}
+                if isinstance(args, dict):
+                    preview_items = []
+                    for k in ["target_role", "task", "reason", "decision", "summary", "workflow_run_id"]:
+                        if k in args:
+                            val = str(args[k]).replace("\n", " ").strip()
+                            if len(val) > 40:
+                                val = val[:37] + "..."
+                            preview_items.append(f"{k}={repr(val)}")
+                    if not preview_items:
+                        for k, v in list(args.items())[:2]:
+                            val = str(v).replace("\n", " ").strip()
+                            if len(val) > 30:
+                                val = val[:27] + "..."
+                            preview_items.append(f"{k}={repr(val)}")
+                    args_summary = ", ".join(preview_items)
+                else:
+                    args_summary = str(args)[:60].replace("\n", " ")
+                log.write(f"[yellow]⚡ Tool Call:[/yellow] [bold]{escape(tool_name)}[/bold]({escape(args_summary)})")
             elif act_type == "tool_result":
-                out_str = str(activity.get("output", "")).strip()
+                out_str = str(activity.get("output", "")).strip().replace("\n", " ")
                 if out_str:
-                    log.write(f"[dim yellow]↳ Output:[/dim yellow] {escape(out_str[:250])}")
+                    if len(out_str) > 120:
+                        out_str = out_str[:117] + "..."
+                    log.write(f"[dim yellow]↳ Output:[/dim yellow] {escape(out_str)}")
             elif act_type == "agent_message":
                 msg_content = str(activity.get("content", ""))
                 log.write(msg_content, markup=False)

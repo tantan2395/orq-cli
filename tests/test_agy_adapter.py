@@ -15,7 +15,6 @@ def test_agy_adapter_build_command():
     )
 
     assert cmd[0] == "/usr/bin/agy"
-    assert cmd[1] == "-p"
     assert "--output-format" in cmd
     assert "stream-json" in cmd
     assert "--model" in cmd
@@ -23,6 +22,7 @@ def test_agy_adapter_build_command():
     assert "--effort" in cmd
     assert "medium" in cmd
     assert "--dangerously-skip-permissions" in cmd
+    assert cmd[-2] == "-p"
     assert cmd[-1] == "Implement the feature"
 
 

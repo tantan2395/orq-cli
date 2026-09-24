@@ -149,16 +149,25 @@ class CodexAdapter(BaseAgentAdapter):
                 }
             elif itype in ["command_execution", "commandexecution"]:
                 cmd = item.get("command")
-                out = item.get("aggregated_output")
+                if isinstance(cmd, list):
+                    cmd_str = " ".join(cmd)
+                else:
+                    cmd_str = str(cmd or "")
+                if "-lc" in cmd_str:
+                    parts = cmd_str.split("-lc", 1)
+                    if len(parts) > 1:
+                        cmd_str = parts[1].strip().strip("'\"")
+                if len(cmd_str) > 80:
+                    cmd_str = cmd_str[:77] + "..."
+
+                exit_code = item.get("exit_code")
+                code_info = f" (exit {exit_code})" if exit_code is not None else ""
                 if "completed" in effective_type:
-                    if out:
-                        return {"type": "status", "status": f"Executed command `{cmd}`: {out.strip()}"}
-                    elif cmd:
-                        return {"type": "status", "status": f"Executed command `{cmd}`"}
+                    return {"type": "status", "status": f"Ran `{cmd_str}`{code_info}"}
                 elif "started" in effective_type and cmd:
-                    return {"type": "status", "status": f"Running command `{cmd}`..."}
+                    return {"type": "status", "status": f"Running `{cmd_str}`..."}
                 elif cmd:
-                    return {"type": "status", "status": f"Executed command: {cmd}"}
+                    return {"type": "status", "status": f"Ran `{cmd_str}`{code_info}"}
 
         # 3. Handle Codex CLI nested event_msg structure
         if top_type == "event_msg":

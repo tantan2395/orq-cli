@@ -25,7 +25,7 @@ class AgyAdapter(BaseAgentAdapter):
         session_id: Optional[str] = None,
     ) -> List[str]:
         """Constructs CLI arguments for agy -p."""
-        cmd = [self.binary_path, "-p"]
+        cmd = [self.binary_path]
         effective_session = session_id or self.active_session_id
         if effective_session:
             cmd.extend(["--conversation", effective_session])
@@ -36,7 +36,7 @@ class AgyAdapter(BaseAgentAdapter):
             "--effort", reasoning.value,
             "--dangerously-skip-permissions",
             "--add-dir", os.path.abspath(workspace_root),
-            prompt,
+            "-p", prompt,
         ])
         return cmd
 
