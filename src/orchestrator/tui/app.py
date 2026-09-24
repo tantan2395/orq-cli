@@ -283,6 +283,10 @@ class OrchestratorTUI(App):
                 log.write(f"[dim]• {escape(str(activity.get('status', '')))}[/dim]")
             elif act_type == "tool_call":
                 log.write(f"[yellow]⚡ Tool Call:[/yellow] [bold]{escape(str(activity.get('name', '')))}[/bold]({escape(str(activity.get('args', '')))})")
+            elif act_type == "tool_result":
+                out_str = str(activity.get("output", "")).strip()
+                if out_str:
+                    log.write(f"[dim yellow]↳ Output:[/dim yellow] {escape(out_str[:250])}")
             elif act_type == "agent_message":
                 msg_content = str(activity.get("content", ""))
                 log.write(msg_content, markup=False)

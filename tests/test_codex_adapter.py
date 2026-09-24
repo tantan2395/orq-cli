@@ -85,3 +85,28 @@ def test_codex_adapter_parse_lines():
     assert parsed_resp["type"] == "agent_message"
     assert "All checks passed." in parsed_resp["content"]
 
+    # Native Codex exec stdout stream: thread.started
+    thread_started_line = '{"type":"thread.started","thread_id":"01a0d1ae-e512-7f80-a60b-b126834ca874"}'
+    adapter._parse_line(thread_started_line)
+    assert adapter.active_session_id == "01a0d1ae-e512-7f80-a60b-b126834ca874"
+
+    # Native Codex exec stdout stream: item.completed (agent_message)
+    native_msg_line = '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Yes. Orq exposes seven MCP tools."}}'
+    parsed_native_msg = adapter._parse_line(native_msg_line)
+    assert parsed_native_msg["type"] == "agent_message"
+    assert "Orq exposes seven MCP tools" in parsed_native_msg["content"]
+
+    # Native Codex exec stdout stream: item.started (mcp_tool_call)
+    native_tool_start = '{"type":"item.started","item":{"id":"item_1","type":"mcp_tool_call","server":"orchestrator","tool":"workflow_status","arguments":{"workflow_run_id":"run_123"}}}'
+    parsed_tool_start = adapter._parse_line(native_tool_start)
+    assert parsed_tool_start["type"] == "tool_call"
+    assert parsed_tool_start["name"] == "orchestrator:workflow_status"
+    assert parsed_tool_start["args"]["workflow_run_id"] == "run_123"
+
+    # Native Codex exec stdout stream: item.completed (command_execution)
+    native_cmd_line = '{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"echo hello","aggregated_output":"hello\\n","exit_code":0}}'
+    parsed_cmd = adapter._parse_line(native_cmd_line)
+    assert parsed_cmd["type"] == "status"
+    assert "echo hello" in parsed_cmd["status"]
+
+

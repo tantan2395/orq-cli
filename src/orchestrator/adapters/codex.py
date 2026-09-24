@@ -106,37 +106,69 @@ class CodexAdapter(BaseAgentAdapter):
         payload = data.get("payload", {}) if isinstance(data.get("payload"), dict) else {}
 
         # 1. Capture native session / thread ID
-        sess = payload.get("id") or payload.get("session_id") or payload.get("thread_id") or data.get("thread_id") or data.get("session_id") or data.get("id")
+        sess = (
+            data.get("thread_id")
+            or data.get("session_id")
+            or payload.get("id")
+            or payload.get("session_id")
+            or payload.get("thread_id")
+            or data.get("id")
+        )
         if sess and ("thread" in top_type or "session" in top_type):
             self.active_session_id = str(sess)
 
-        # 2. Handle Codex CLI nested event_msg structure
-        if top_type == "event_msg":
-            p_type = str(payload.get("type", "")).lower()
-            if p_type == "item_completed":
-                item = payload.get("item", {}) if isinstance(payload.get("item"), dict) else {}
-                itype = str(item.get("type", "")).lower()
-                if itype == "agentmessage":
-                    contents = item.get("content", [])
+        # 2. Native codex exec stdout stream & nested event_msg
+        effective_type = (top_type + " " + str(payload.get("type", ""))).lower()
+        item = data.get("item") or payload.get("item") or {}
+        if isinstance(item, dict) and item:
+            itype = str(item.get("type", "")).lower()
+            if itype in ["agent_message", "agentmessage"]:
+                text = item.get("text")
+                if text:
+                    return {"type": "agent_message", "content": str(text)}
+                contents = item.get("content", [])
+                if isinstance(contents, list):
                     texts = [c.get("text", "") for c in contents if isinstance(c, dict) and c.get("text")]
                     if texts:
                         return {"type": "agent_message", "content": "\n".join(texts)}
-                elif itype == "mcptoolcall":
-                    return {
-                        "type": "tool_call",
-                        "name": f"{item.get('server', 'mcp')}:{item.get('tool', 'tool')}",
-                        "args": item.get("arguments", {}),
-                    }
-                elif itype == "commandexecution":
-                    cmd = item.get("command")
-                    if cmd:
-                        return {"type": "status", "status": f"Executed command: {cmd}"}
-            elif p_type == "task_complete":
+            elif itype in ["mcp_tool_call", "mcptoolcall"]:
+                server = item.get("server") or "mcp"
+                tool = item.get("tool") or item.get("name") or "tool"
+                res = item.get("result")
+                if "completed" in effective_type and res is not None:
+                    res_str = ""
+                    if isinstance(res, dict) and "content" in res and isinstance(res["content"], list):
+                        res_str = "\n".join(c.get("text", "") for c in res["content"] if isinstance(c, dict) and c.get("text"))
+                    if not res_str:
+                        res_str = str(res)
+                    return {"type": "tool_result", "output": res_str}
+                return {
+                    "type": "tool_call",
+                    "name": f"{server}:{tool}",
+                    "args": item.get("arguments") or item.get("args") or {},
+                }
+            elif itype in ["command_execution", "commandexecution"]:
+                cmd = item.get("command")
+                out = item.get("aggregated_output")
+                if "completed" in effective_type:
+                    if out:
+                        return {"type": "status", "status": f"Executed command `{cmd}`: {out.strip()}"}
+                    elif cmd:
+                        return {"type": "status", "status": f"Executed command `{cmd}`"}
+                elif "started" in effective_type and cmd:
+                    return {"type": "status", "status": f"Running command `{cmd}`..."}
+                elif cmd:
+                    return {"type": "status", "status": f"Executed command: {cmd}"}
+
+        # 3. Handle Codex CLI nested event_msg structure
+        if top_type == "event_msg":
+            p_type = str(payload.get("type", "")).lower()
+            if p_type == "task_complete":
                 last_msg = payload.get("last_agent_message")
                 if last_msg:
                     return {"type": "agent_message", "content": str(last_msg)}
 
-        # 3. Handle response_item
+        # 4. Handle response_item
         if top_type == "response_item":
             p_type = str(payload.get("type", "")).lower()
             if p_type == "message" and payload.get("role") == "assistant":
@@ -151,7 +183,7 @@ class CodexAdapter(BaseAgentAdapter):
                     "args": payload.get("input") or payload.get("args") or {},
                 }
 
-        # 4. Standard / legacy flat event structures
+        # 5. Standard / legacy flat event structures
         if "tool_call" in top_type or "tool_use" in top_type:
             return {
                 "type": "tool_call",
