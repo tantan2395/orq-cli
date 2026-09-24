@@ -48,7 +48,25 @@ class OrchestratorTUI(App):
         background: #1e293b;
         border-bottom: solid #334155;
         padding: 0 1;
-        content-align: center middle;
+        align-vertical: middle;
+    }
+
+    #status-run-info {
+        width: 1fr;
+    }
+
+    #status-role-badge {
+        margin-right: 1;
+        padding: 0 1;
+        background: #334155;
+        border: solid #475569;
+    }
+
+    #status-state-badge {
+        margin-right: 1;
+        padding: 0 1;
+        background: #1e3a5f;
+        border: solid #0284c7;
     }
 
     #main-split {
@@ -72,6 +90,30 @@ class OrchestratorTUI(App):
         background: #090d16;
         border: solid #1e293b;
         padding: 0 1;
+    }
+
+    #tabs {
+        height: 1fr;
+    }
+
+    #chat-container {
+        height: 1fr;
+    }
+
+    #chat-role-row {
+        height: 3;
+        margin-bottom: 1;
+        align-vertical: middle;
+    }
+
+    #chat-role-label {
+        margin-right: 1;
+        padding-top: 1;
+        color: #94a3b8;
+    }
+
+    #chat-role-select {
+        width: 1fr;
     }
 
     .chat-box {
@@ -110,6 +152,13 @@ class OrchestratorTUI(App):
     .stage-done {
         border: solid #22c55e;
         background: #14532d;
+    }
+
+    #tasks-log, #artifacts-log {
+        height: 1fr;
+        background: #090d16;
+        border: solid #1e293b;
+        padding: 0 1;
     }
 
     #control-row {
@@ -178,14 +227,14 @@ class OrchestratorTUI(App):
 
                 with TabbedContent(id="tabs"):
                     with TabPane("Direct Chat", id="tab-chat"):
-                        with Vertical():
-                            yield Horizontal(
-                                Select(
+                        with Vertical(id="chat-container"):
+                            with Horizontal(id="chat-role-row"):
+                                yield Label("Role:", id="chat-role-label")
+                                yield Select(
                                     [(role, role) for role in self.config.roles.keys()],
                                     value="decision_maker",
                                     id="chat-role-select",
-                                ),
-                            )
+                                )
                             yield RichLog(id="chat-log", wrap=True, highlight=True, markup=True, classes="chat-box")
                             with Horizontal(id="chat-input-row"):
                                 yield Input(placeholder="Send direct instruction to role...", id="chat-input")
