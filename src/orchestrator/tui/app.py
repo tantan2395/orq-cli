@@ -314,6 +314,7 @@ class OrchestratorTUI(App):
                 if event.role:
                     chat_log = self.query_one("#chat-log", RichLog)
                     chat_log.write(f"[bold green]{escape(str(event.role))}:[/bold green] {escape(msg_content)}")
+                    chat_log.scroll_end(animate=False)
             elif act_type == "error":
                 log.write(f"[bold red]✗ Error:[/bold red] {escape(str(activity.get('error', '')))}")
         elif event.type == "stage_started":
@@ -329,6 +330,7 @@ class OrchestratorTUI(App):
             log.write(f"\n[bold yellow]⏸ Workflow Paused:[/bold yellow] {escape(reason)}")
             chat_log = self.query_one("#chat-log", RichLog)
             chat_log.write(f"[bold yellow]⏸ {escape(str(event.role or 'Agent'))}:[/bold yellow] {escape(reason)}")
+            chat_log.scroll_end(animate=False)
             refreshed = await self.db.get_workflow_run(self.workflow_run.run_id)
             if refreshed:
                 self.workflow_run = refreshed
@@ -345,10 +347,17 @@ class OrchestratorTUI(App):
             await self._refresh_tasks()
         if event.type == "artifact_registered":
             await self._refresh_artifacts()
-        if event.type == "agent_message_sent":
+        if event.type in ["agent_message_sent", "message_sent"]:
             payload = event.payload
+            sender = event.role or "Agent"
+            recipient = payload.get("recipient") or payload.get("target") or "human"
+            message_text = payload.get("message") or payload.get("content") or ""
             chat_log = self.query_one("#chat-log", RichLog)
-            chat_log.write(f"[bold green]{escape(str(event.role))} → {escape(str(payload.get('target')))}:[/bold green] {escape(str(payload.get('content')))}")
+            if str(recipient).lower() == "human":
+                chat_log.write(f"[bold green]{escape(str(sender))}:[/bold green] {escape(str(message_text))}")
+            else:
+                chat_log.write(f"[bold green]{escape(str(sender))} → {escape(str(recipient))}:[/bold green] {escape(str(message_text))}")
+            chat_log.scroll_end(animate=False)
 
     def _update_header(self) -> None:
         if not self.workflow_run:
@@ -546,6 +555,7 @@ class OrchestratorTUI(App):
             target_role = str(role_select.value)
             chat_log = self.query_one("#chat-log", RichLog)
             chat_log.write(f"[bold cyan]Me → {escape(target_role)}:[/bold cyan] {escape(text)}")
+            chat_log.scroll_end(animate=False)
             await self.engine.handle_human_intervention(HumanInterventionCommand(
                 workflow_run_id=self.workflow_run.run_id,
                 target_role=target_role,

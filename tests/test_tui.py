@@ -74,3 +74,31 @@ async def test_tui_chat_auto_resumes_paused_workflow():
 
         assert app.workflow_run.status == "running"
 
+
+@pytest.mark.asyncio
+async def test_tui_message_sent_renders_in_chat():
+    """Verify that message_sent events from agents render in Direct Chat."""
+    from orchestrator.events import create_event
+
+    app = OrchestratorTUI()
+    async with app.run_test() as pilot:
+        chat_log = app.query_one("#chat-log", RichLog)
+
+        # Publish a message_sent event as emitted by engine.handle_message
+        evt = create_event(
+            workflow_run_id=app.workflow_run.run_id,
+            event_type="message_sent",
+            role="decision_maker",
+            payload={
+                "recipient": "human",
+                "message": "Here is the list of Orq MCP tools: agents_handoff, review_request...",
+            },
+        )
+        await app.events.publish(evt)
+        await pilot.pause()
+
+        # Check that the message was rendered to chat_log
+        lines = [line.text for line in chat_log.lines]
+        matching = any("Here is the list of Orq MCP tools" in line for line in lines)
+        assert matching, f"Expected message in chat_log lines, got: {lines}"
+

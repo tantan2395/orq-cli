@@ -54,7 +54,13 @@ class ContextManager:
         payload = task.payload
         bounded_task = payload.get("task") or payload.get("summary") or payload.get("message") or task.type
         if task.type == "human_intervention" and payload.get("message"):
-            bounded_task = f"[DIRECT HUMAN OPERATOR INSTRUCTION]\n{payload.get('message')}"
+            bounded_task = (
+                f"[DIRECT HUMAN OPERATOR INSTRUCTION]\n{payload.get('message')}\n\n"
+                f"[GUIDELINE FOR HUMAN INQUIRY]\n"
+                f"If the human operator is asking an informational question, inquiry, or explanation, provide the answer directly "
+                f"(in your response or via agents_message to recipient 'human'). Do NOT hand off to developer or initiate a code implementation "
+                f"loop unless the human is requesting an actual code or repository change."
+            )
         constraints = payload.get("constraints", [])
         acceptance_criteria = payload.get("acceptance_criteria", [])
         artifacts = payload.get("artifacts", [])
