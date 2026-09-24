@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 from rich.markdown import Markdown
+from rich.markup import escape
 from rich.panel import Panel
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -158,9 +159,9 @@ class OrchestratorTUI(App):
         yield Header(show_clock=True)
 
         with Horizontal(id="status-bar"):
-            yield Label(id="status-run-info", text="Initializing...")
-            yield Label(id="status-role-badge", text="[Role: None]")
-            yield Label(id="status-state-badge", text="[State: Idle]")
+            yield Label("Initializing...", id="status-run-info")
+            yield Label("Role: None", id="status-role-badge")
+            yield Label("State: Idle", id="status-state-badge")
 
         with Horizontal(id="main-split"):
             # Left pane: Live Activity Log
@@ -225,20 +226,20 @@ class OrchestratorTUI(App):
 
         if event.type == "agent_turn_started":
             payload = event.payload
-            log.write(f"\n[bold blue]━━━ Turn Started: Role '{event.role}' ({payload.get('agent')}/{payload.get('model')}) ━━━[/bold blue]")
+            log.write(f"\n[bold blue]━━━ Turn Started: Role '{escape(str(event.role))}' ({escape(str(payload.get('agent')))}/{escape(str(payload.get('model')))}) ━━━[/bold blue]")
         elif event.type == "agent_activity":
             activity = event.payload
             act_type = activity.get("type")
             if act_type == "status":
-                log.write(f"[dim]• {activity.get('status')}[/dim]")
+                log.write(f"[dim]• {escape(str(activity.get('status', '')))}[/dim]")
             elif act_type == "tool_call":
-                log.write(f"[yellow]⚡ Tool Call:[/yellow] [bold]{activity.get('name')}[/bold]({activity.get('args')})")
+                log.write(f"[yellow]⚡ Tool Call:[/yellow] [bold]{escape(str(activity.get('name', '')))}[/bold]({escape(str(activity.get('args', '')))})")
             elif act_type == "agent_message":
-                log.write(activity.get("content", ""))
+                log.write(activity.get("content", ""), markup=False)
             elif act_type == "error":
-                log.write(f"[bold red]✗ Error:[/bold red] {activity.get('error')}")
+                log.write(f"[bold red]✗ Error:[/bold red] {escape(str(activity.get('error', '')))}")
         elif event.type == "stage_started":
-            log.write(f"\n[bold green]▶ Stage Started:[/bold green] [bold]{event.payload.get('new_stage')}[/bold]")
+            log.write(f"\n[bold green]▶ Stage Started:[/bold green] [bold]{escape(str(event.payload.get('new_stage', '')))}[/bold]")
             self._update_header()
             self._render_dag()
         elif event.type == "workflow_completed":
@@ -264,11 +265,11 @@ class OrchestratorTUI(App):
         if definition and self.workflow_run.current_stage in definition.stages:
             current_role = definition.stages[self.workflow_run.current_stage].role
 
-        run_info.update(f"Run: [cyan]{self.workflow_run.run_id}[/cyan] | Stage: [bold]{self.workflow_run.current_stage}[/bold]")
-        role_badge.update(f"[Role: [bold yellow]{current_role}[/bold yellow]]")
+        run_info.update(f"Run: [cyan]{escape(self.workflow_run.run_id)}[/cyan] | Stage: [bold]{escape(self.workflow_run.current_stage)}[/bold]")
+        role_badge.update(f"Role: [bold yellow]{escape(current_role)}[/bold yellow]")
 
         status_color = "green" if self.workflow_run.status == "running" else "yellow" if self.workflow_run.status == "paused" else "blue"
-        state_badge.update(f"[State: [bold {status_color}]{self.workflow_run.status.upper()}[/bold {status_color}]]")
+        state_badge.update(f"State: [bold {status_color}]{escape(self.workflow_run.status.upper())}[/bold {status_color}]")
 
     def _render_dag(self) -> None:
         dag = self.query_one("#dag-container", VerticalScroll)
@@ -292,9 +293,9 @@ class OrchestratorTUI(App):
                 badge = "✓ Complete"
 
             card = Static(
-                f"[bold]{name.upper()}[/bold] ({badge})\n"
-                f"Role: [yellow]{stage.role}[/yellow] ({stage.type.value})\n"
-                f"[dim]{stage.description}[/dim]",
+                f"[bold]{escape(name.upper())}[/bold] ({badge})\n"
+                f"Role: [yellow]{escape(stage.role)}[/yellow] ({escape(stage.type.value)})\n"
+                f"[dim]{escape(stage.description)}[/dim]",
                 classes=classes,
             )
             dag.mount(card)
@@ -308,9 +309,9 @@ class OrchestratorTUI(App):
         for t in tasks:
             status_color = "green" if t.status == "completed" else "yellow" if t.status == "running" else "dim"
             tasks_log.write(
-                f"[{status_color}]● [{t.status.upper()}][/{status_color}] [bold]{t.type}[/bold] "
-                f"({t.requested_by} → {t.target_role or 'engine'})\n"
-                f"  Task: {t.payload.get('task') or t.payload.get('summary') or ''}\n"
+                f"[{status_color}]● {escape(t.status.upper())}[/{status_color}] [bold]{escape(t.type)}[/bold] "
+                f"({escape(t.requested_by)} → {escape(t.target_role or 'engine')})\n"
+                f"  Task: {escape(str(t.payload.get('task') or t.payload.get('summary') or ''))}\n"
             )
 
     async def _refresh_artifacts(self) -> None:
@@ -320,7 +321,7 @@ class OrchestratorTUI(App):
             return
         arts = await self.db.list_artifacts(self.workflow_run.run_id)
         for a in arts:
-            artifacts_log.write(f"[bold cyan]{a.type.value.upper()}[/bold cyan]: {a.path} [dim]({a.description or ''})[/dim]")
+            artifacts_log.write(f"[bold cyan]{escape(a.type.value.upper())}[/bold cyan]: {escape(a.path)} [dim]({escape(a.description or '')})[/dim]")
 
     async def _run_orchestrator_loop(self) -> None:
         """Autonomous execution loop coordinating turns in background."""
@@ -404,7 +405,7 @@ class OrchestratorTUI(App):
             if text:
                 target_role = str(role_select.value)
                 chat_log = self.query_one("#chat-log", RichLog)
-                chat_log.write(f"[bold cyan]Me → {target_role}:[/bold cyan] {text}")
+                chat_log.write(f"[bold cyan]Me → {escape(target_role)}:[/bold cyan] {escape(text)}")
                 await self.engine.handle_human_intervention(HumanInterventionCommand(
                     workflow_run_id=self.workflow_run.run_id,
                     target_role=target_role,
