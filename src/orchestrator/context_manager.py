@@ -57,7 +57,7 @@ class ContextManager:
     def assemble_effective_prompt(self, context: AgentTurnContext) -> str:
         """Formats the immutable turn context into an explicit prompt for the agent CLI."""
         sections = [
-            f"[AGENT IDENTITY CONTRACT]\nROLE: {context.role}\nWORKFLOW STAGE: {context.stage_id}\nOBJECTIVE: {context.objective}",
+            f"[AGENT IDENTITY CONTRACT]\nROLE: {context.role}\nWORKFLOW RUN ID: {context.workflow_run_id}\nWORKFLOW STAGE: {context.stage_id}\nOBJECTIVE: {context.objective}",
         ]
 
         if context.role_contract:

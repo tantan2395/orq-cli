@@ -44,8 +44,9 @@ class OrchestrationEngine:
         self.context_manager = ContextManager()
 
     async def initialize(self) -> None:
-        """Initializes database schema and storage."""
+        """Initializes database schema and storage, and wires event store persistence."""
         await self.db.initialize()
+        self.events.add_callback(self.db.save_event)
 
     async def create_workflow_run(
         self,
