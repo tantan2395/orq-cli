@@ -88,7 +88,7 @@ def cmd_profile_import(args: argparse.Namespace) -> int:
     meta_path = profile_dir / "profile.json"
     meta_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     console.print(f"[bold green]✓ Candidate profile created at:[/bold green] [cyan]{meta_path}[/cyan]")
-    console.print(f"Run [bold white]'orchestrator profile inspect {args.target}'[/bold white] to review.")
+    console.print(f"Run [bold white]'orq profile inspect {args.target}'[/bold white] to review.")
     return 0
 
 
@@ -107,8 +107,8 @@ def cmd_profile_inspect(args: argparse.Namespace) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog="orchestrator",
-        description="Local multi-agent orchestration runtime for coding agents",
+        prog="orq",
+        description="orq: Local multi-agent orchestration runtime for coding agents",
     )
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
 

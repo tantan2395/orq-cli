@@ -1,7 +1,7 @@
 [project]
-name = "agent-orchestrator"
+name = "orq-cli"
 version = "0.1.0"
-description = "Local multi-agent orchestration runtime for coding agents"
+description = "orq: Local multi-agent orchestration runtime for coding agents"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -16,6 +16,8 @@ dependencies = [
 ]
 
 [project.scripts]
+orq = "orchestrator.cli:main"
+orq-mcp-bridge = "orchestrator.mcp.client_bridge:main"
 orchestrator = "orchestrator.cli:main"
 orchestrator-mcp-bridge = "orchestrator.mcp.client_bridge:main"
 
